@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>DouYin Spark Flow</title>
+  <style>
+    :root { --bg:#f5f6f8; --card:#fff; --text:#16181d; --muted:#737985; --line:#e6e8ec; --good:#15803d; --warn:#b45309; --bad:#b91c1c; --accent:#2563eb; --soft:#eef4ff; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#0d0f12; --card:#171a1f; --text:#f4f5f7; --muted:#969da9; --line:#2b3038; --good:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#60a5fa; --soft:#17233b; } }
+    * { box-sizing:border-box; }
+    body { margin:0; font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+    main { max-width:1120px; margin:auto; padding:28px 18px 56px; }
+    header { display:flex; justify-content:space-between; gap:18px; align-items:flex-start; margin-bottom:22px; }
+    h1 { font-size:26px; margin:0 0 4px; letter-spacing:-.02em; }
+    h2 { font-size:16px; margin:0 0 14px; }
+    .muted { color:var(--muted); }
+    .live { display:inline-flex; gap:7px; align-items:center; font-size:13px; color:var(--good); white-space:nowrap; }
+    .dot { width:8px; height:8px; border-radius:50%; background:currentColor; box-shadow:0 0 0 4px color-mix(in srgb,currentColor 12%,transparent); }
+    .grid { display:grid; gap:14px; grid-template-columns:repeat(4,minmax(0,1fr)); }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:15px; padding:17px; min-width:0; }
+    .metric .label { font-size:12px; color:var(--muted); margin-bottom:7px; }
+    .metric .value { font-size:24px; font-weight:700; letter-spacing:-.02em; }
+    .metric .sub { font-size:12px; color:var(--muted); margin-top:4px; }
+    .wide { grid-column:span 2; }
+    .section { margin-top:14px; }
+    .status-line { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:11px 0; border-top:1px solid var(--line); }
+    .status-line:first-of-type { border-top:0; padding-top:0; }
+    .who { min-width:0; }
+    .friend { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .account { color:var(--muted); font-size:12px; }
+    .pill { border-radius:999px; padding:4px 9px; font-size:12px; font-weight:600; white-space:nowrap; }
+    .pill.confirmed { color:var(--good); background:color-mix(in srgb,var(--good) 12%,transparent); }
+    .pill.attempted,.pill.running,.pill.due { color:var(--warn); background:color-mix(in srgb,var(--warn) 12%,transparent); }
+    .pill.pending,.pill.prepared,.pill.waiting { color:var(--muted); background:color-mix(in srgb,var(--muted) 12%,transparent); }
+    .pill.failed,.pill.error { color:var(--bad); background:color-mix(in srgb,var(--bad) 12%,transparent); }
+    .chart-wrap { overflow-x:auto; }
+    svg { width:100%; min-width:420px; height:230px; display:block; }
+    .axis { stroke:var(--line); stroke-width:1; }
+    .bar-bg { fill:color-mix(in srgb,var(--muted) 10%,transparent); }
+    .bar-ok { fill:var(--accent); }
+    .point { fill:var(--accent); stroke:var(--card); stroke-width:2; }
+    .svg-label { fill:var(--muted); font:11px system-ui,sans-serif; }
+    .legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:8px; color:var(--muted); font-size:12px; }
+    .event { padding:10px 0; border-top:1px solid var(--line); }
+    .event:first-of-type { border-top:0; padding-top:0; }
+    .event-head { display:flex; gap:8px; align-items:center; margin-bottom:2px; font-size:12px; color:var(--muted); }
+    .event-msg { word-break:break-word; }
+    .empty { color:var(--muted); padding:18px 0; text-align:center; }
+    .errorbox { display:none; margin-bottom:14px; padding:12px 14px; border-radius:10px; color:var(--bad); background:color-mix(in srgb,var(--bad) 10%,transparent); }
+    @media (max-width:800px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .wide { grid-column:span 2; } }
+    @media (max-width:520px) { main{padding:20px 12px 40px} header{align-items:flex-start} .grid{gap:10px} .card{padding:14px;border-radius:13px} .metric .value{font-size:21px} .wide{grid-column:span 2} }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>DouYin Spark Flow</h1><div class="muted">续火花运行状态 · 自动刷新</div></div>
+    <div class="live"><span class="dot"></span><span id="liveText">连接中</span></div>
+  </header>
+  <div id="error" class="errorbox"></div>
+
+  <section class="grid">
+    <div class="card metric"><div class="label">今日状态</div><div id="phase" class="value">—</div><div id="phaseSub" class="sub">—</div></div>
+    <div class="card metric"><div class="label">今日随机时间</div><div id="target" class="value">—</div><div id="window" class="sub">—</div></div>
+    <div class="card metric"><div class="label">今日成功</div><div id="todayCount" class="value">—</div><div class="sub">已确认持久化</div></div>
+    <div class="card metric"><div class="label">历史成功率</div><div id="rate" class="value">—</div><div id="rateSub" class="sub">—</div></div>
+  </section>
+
+  <section class="grid section">
+    <div class="card wide"><h2>今日好友</h2><div id="friends"></div></div>
+    <div class="card wide"><h2>最近事件</h2><div id="events"></div></div>
+  </section>
+
+  <section class="grid section">
+    <div class="card wide"><h2>每日发送结果</h2><div class="chart-wrap"><svg id="successChart" viewBox="0 0 620 230" aria-label="每日发送结果图"></svg></div><div class="legend">蓝色 = confirmed；浅色 = 当天记录总数</div></div>
+    <div class="card wide"><h2>实际执行时间</h2><div class="chart-wrap"><svg id="timeChart" viewBox="0 0 620 230" aria-label="实际执行时间图"></svg></div><div class="legend">按首次发送尝试时间估算；随机窗口为北京时间 08:00–10:00</div></div>
+  </section>
+
+  <div class="muted" id="footer" style="margin-top:16px;font-size:12px"></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const labels = { completed:'已完成', waiting:'等待中', running:'执行中', due:'待执行', confirmed:'已确认', attempted:'确认中', prepared:'已准备', pending:'未执行', failed:'失败', error:'错误' };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function drawSuccess(items) {
+  const svg = $('successChart');
+  if (!items.length) { svg.innerHTML='<text x="310" y="115" text-anchor="middle" class="svg-label">暂无历史数据</text>'; return; }
+  const data = items.slice(-14), W=620,H=230,left=36,right=12,top=18,bottom=38, base=H-bottom, usable=W-left-right;
+  const max=Math.max(1,...data.map(x=>x.total)); const slot=usable/data.length; const bw=Math.max(10,Math.min(28,slot*.52));
+  let out=`<line x1="${left}" y1="${base}" x2="${W-right}" y2="${base}" class="axis"/>`;
+  data.forEach((d,i)=>{ const x=left+i*slot+(slot-bw)/2; const full=(base-top)*(d.total/max); const ok=(base-top)*(d.confirmed/max); out+=`<rect x="${x}" y="${base-full}" width="${bw}" height="${full}" rx="4" class="bar-bg"/><rect x="${x}" y="${base-ok}" width="${bw}" height="${ok}" rx="4" class="bar-ok"/><text x="${x+bw/2}" y="${base+17}" text-anchor="middle" class="svg-label">${esc(d.day.slice(5))}</text><text x="${x+bw/2}" y="${Math.max(12,base-full-5)}" text-anchor="middle" class="svg-label">${d.confirmed}/${d.total}</text>`; });
+  svg.innerHTML=out;
+}
+
+function drawTimes(items) {
+  const svg=$('timeChart'); const data=items.slice(-14).filter(x=>Number.isFinite(x.execution_second));
+  if (!data.length) { svg.innerHTML='<text x="310" y="115" text-anchor="middle" class="svg-label">执行一次后会开始积累时间分布</text>'; return; }
+  const W=620,H=230,left=48,right=12,top=18,bottom=38,base=H-bottom,usable=W-left-right,start=8*3600,end=10*3600;
+  let out=''; [8,9,10].forEach(h=>{ const y=top+(h*3600-start)/(end-start)*(base-top); out+=`<line x1="${left}" y1="${y}" x2="${W-right}" y2="${y}" class="axis"/><text x="${left-8}" y="${y+4}" text-anchor="end" class="svg-label">${String(h).padStart(2,'0')}:00</text>`; });
+  const slot=usable/Math.max(1,data.length); data.forEach((d,i)=>{ const clipped=Math.min(end,Math.max(start,d.execution_second)); const y=top+(clipped-start)/(end-start)*(base-top); const x=left+slot*(i+.5); out+=`<circle cx="${x}" cy="${y}" r="5" class="point"><title>${esc(d.day)} ${esc(d.execution_time||'')}</title></circle><text x="${x}" y="${base+17}" text-anchor="middle" class="svg-label">${esc(d.day.slice(5))}</text>`; });
+  svg.innerHTML=out;
+}
+
+function render(d) {
+  $('liveText').textContent='在线';
+  const p=d.today_status;
+  $('phase').textContent=labels[p.phase]||p.phase;
+  $('phaseSub').textContent=`${d.today} · ${d.timezone}`;
+  $('target').textContent=d.schedule.target||'等待生成';
+  $('window').textContent=d.schedule.mode==='random_window' ? `${d.schedule.start} 起 · ${Math.round(d.schedule.window_seconds/3600)} 小时随机窗口` : `固定 ${d.schedule.start}`;
+  $('todayCount').textContent=`${p.confirmed} / ${p.expected}`;
+  $('rate').textContent=`${d.stats.success_rate}%`;
+  $('rateSub').textContent=`${d.stats.confirmed} confirmed · ${d.stats.observed_days} 天有记录`;
+  $('friends').innerHTML=p.rows.length ? p.rows.map(r=>`<div class="status-line"><div class="who"><div class="friend">${esc(r.friend)}</div><div class="account">${esc(r.account)}${r.confirmed_time?` · ${esc(r.confirmed_time)}`:''}</div></div><span class="pill ${esc(r.status)}">${esc(labels[r.status]||r.status)}</span></div>`).join('') : '<div class="empty">没有配置目标好友</div>';
+  $('events').innerHTML=d.recent_events.length ? d.recent_events.map(e=>`<div class="event"><div class="event-head"><span>${esc(e.time)}</span><span>${esc(e.level)}</span></div><div class="event-msg">${esc(e.message)}</div></div>`).join('') : '<div class="empty">暂无事件记录</div>';
+  drawSuccess(d.daily); drawTimes(d.daily);
+  $('footer').textContent=`最后刷新：${new Date(d.generated_at).toLocaleString()} · 页面每 30 秒自动刷新`;
+}
+
+async function refresh() {
+  try { const r=await fetch('/api/status',{cache:'no-store'}); if(!r.ok) throw new Error(`HTTP ${r.status}`); render(await r.json()); $('error').style.display='none'; }
+  catch(e) { $('liveText').textContent='连接失败'; $('error').textContent=`读取状态失败：${e.message}`; $('error').style.display='block'; }
+}
+refresh(); setInterval(refresh,30000);
+</script>
+</body>
+</html>

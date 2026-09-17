@@ -36,6 +36,7 @@ Docker 部署时，程序会从容器内 `/app/.env` 读取配置。
 说明：
 
 - `CRON_HOUR`、`CRON_MINUTE`、`CRON_SECOND` 用于控制每天执行时间。
+- `CRON_RANDOM_WINDOW_SECONDS` 默认为 `0`（固定时间）；大于 `0` 时会从上述起始时间开始，在指定秒数窗口内每天随机选择一个执行时间，并把当天目标时间持久化到 `logs/random-run-schedule.json`。
 - `TZ` 用于控制容器时区，默认推荐 `Asia/Shanghai`。
 - `TASKS` 和 `COOKIES_<unique_id>` 是必填项。
 
