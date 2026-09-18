@@ -47,47 +47,18 @@ values = dotenv_values('/app/.env')
 print(values.get('CRON_SECOND', '0'))
 PY
 )"
-CRON_RANDOM_WINDOW_SECONDS="$(python - <<'PY'
-from dotenv import dotenv_values
-values = dotenv_values('/app/.env')
-print(values.get('CRON_RANDOM_WINDOW_SECONDS', '0'))
-PY
-)"
 TZ="$(cat /tmp/douyin-spark-flow.tz)"
 export TZ
-export CRON_HOUR CRON_MINUTE CRON_SECOND CRON_RANDOM_WINDOW_SECONDS
 
-if [[ -z "$CRON_HOUR" || -z "$CRON_MINUTE" || -z "$CRON_SECOND" || -z "$CRON_RANDOM_WINDOW_SECONDS" ]]; then
-  echo "CRON_HOUR, CRON_MINUTE, CRON_SECOND and CRON_RANDOM_WINDOW_SECONDS are required." >&2
+if [[ -z "$CRON_HOUR" || -z "$CRON_MINUTE" || -z "$CRON_SECOND" ]]; then
+  echo "CRON_HOUR, CRON_MINUTE and CRON_SECOND are required." >&2
   exit 1
 fi
 
-if ! [[ "$CRON_RANDOM_WINDOW_SECONDS" =~ ^[0-9]+$ ]]; then
-  echo "CRON_RANDOM_WINDOW_SECONDS must be a non-negative integer." >&2
-  exit 1
-fi
-
-if (( CRON_RANDOM_WINDOW_SECONDS > 0 )); then
-  read -r RANDOM_START_HOUR RANDOM_END_HOUR < <(python - <<'PY'
-import os
-
-hour = int(os.environ['CRON_HOUR'])
-minute = int(os.environ['CRON_MINUTE'])
-second = int(os.environ['CRON_SECOND'])
-window = int(os.environ['CRON_RANDOM_WINDOW_SECONDS'])
-start = hour * 3600 + minute * 60 + second
-end_exclusive = start + window
-if start < 0 or start >= 86400 or end_exclusive <= start or end_exclusive > 86400:
-    raise SystemExit('random cron window must stay within one local calendar day')
-print(start // 3600, (end_exclusive - 1) // 3600)
-PY
-  )
-  CRON_SCHEDULE="* ${RANDOM_START_HOUR}-${RANDOM_END_HOUR} * * *"
-  SCHEDULE_DESCRIPTION="random window ${CRON_HOUR}:${CRON_MINUTE}:${CRON_SECOND} +${CRON_RANDOM_WINDOW_SECONDS}s"
-else
-  CRON_SCHEDULE="${CRON_MINUTE} ${CRON_HOUR} * * *"
-  SCHEDULE_DESCRIPTION="fixed ${CRON_HOUR}:${CRON_MINUTE}:${CRON_SECOND}"
-fi
+# 随机窗口逻辑隔离在独立 helper；固定模式输出与官方原逻辑相同。
+mapfile -t CRON_INFO < <(python /app/docker/random_scheduler.py cron)
+CRON_SCHEDULE="${CRON_INFO[0]}"
+SCHEDULE_DESCRIPTION="${CRON_INFO[1]}"
 
 cat > /etc/cron.d/douyin-spark-flow <<EOF
 SHELL=/bin/bash
