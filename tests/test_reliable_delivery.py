@@ -186,6 +186,68 @@ class ReliableDeliveryTests(unittest.TestCase):
             0,
         )
 
+    def test_sticker_resource_key_ignores_signed_query_string(self):
+        self.assertEqual(
+            delivery._sticker_resource_key(
+                "https://p9-sign.douyinpic.com/obj/im-resource/"
+                "1687263281313-ts-e7bbade781abe88ab12e706e67?x-signature=temporary"
+            ),
+            "1687263281313-ts-e7bbade781abe88ab12e706e67",
+        )
+
+    def test_sticker_snapshot_normalizes_stable_message_ids(self):
+        class Page:
+            def evaluate(self, script, resource_key):
+                self.resource_key = resource_key
+                return {
+                    "matching_ids": ["old-id", 123],
+                    "matching_count": 2,
+                    "identified_outgoing_count": 4,
+                    "outgoing_count": 4,
+                }
+
+        page = Page()
+        snapshot = delivery._outgoing_sticker_snapshot(page, "resource-key")
+        self.assertEqual(page.resource_key, "resource-key")
+        self.assertEqual(snapshot["matching_ids"], ["old-id", "123"])
+        self.assertEqual(snapshot["matching_count"], 2)
+
+    def test_sticker_fresh_page_requires_new_message_id(self):
+        class VerifyPage:
+            def goto(self, *args, **kwargs): pass
+            def close(self): pass
+
+        class Context:
+            def new_page(self): return VerifyPage()
+
+        class Logger:
+            def warning(self, *args): pass
+
+        with patch.object(delivery, "_open_target", return_value=True), patch.object(
+            delivery,
+            "_outgoing_sticker_snapshot",
+            return_value={
+                "matching_ids": ["old-id", "new-id"],
+                "matching_count": 2,
+                "identified_outgoing_count": 2,
+                "outgoing_count": 2,
+            },
+        ), patch.object(delivery.time, "sleep"):
+            self.assertTrue(
+                delivery.verify_sticker_persisted(
+                    Context(),
+                    "account",
+                    "Ken",
+                    "resource-key",
+                    ["old-id"],
+                    {},
+                    Logger(),
+                    lambda *args: iter(()),
+                    attempts=1,
+                    delay=0,
+                )
+            )
+
     def test_state_keeps_thirty_days(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
@@ -297,6 +359,133 @@ class ReliableDeliveryTests(unittest.TestCase):
             self.assertFalse(first)
             self.assertFalse(second)
             self.assertEqual(clicks["count"], 1)
+
+    def test_native_sticker_records_attempted_before_single_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            clicks = {"count": 0}
+            built = {"count": 0}
+
+            class StickerItem:
+                def dispatch_event(self, event):
+                    self.assert_state_attempted()
+                    self.assertEqualEvent(event)
+                    clicks["count"] += 1
+
+                def assertEqualEvent(self, event):
+                    if event != "click":
+                        raise AssertionError(f"unexpected event: {event}")
+
+                def assert_state_attempted(self):
+                    state = json.loads(path.read_text(encoding="utf-8"))
+                    record = state["days"][delivery._today()]["account"]["Ken"]
+                    if record["status"] != "attempted":
+                        raise AssertionError("state must be attempted before sticker click")
+                    if record["delivery_kind"] != "douyin_sticker":
+                        raise AssertionError("sticker delivery kind must be persisted before click")
+                    if record["baseline_message_ids"] != ["old-id"]:
+                        raise AssertionError("baseline sticker ids must be persisted before click")
+
+            class Logger:
+                def info(self, *args): pass
+                def warning(self, *args): pass
+                def error(self, *args): pass
+
+            def message_factory():
+                built["count"] += 1
+                return "must not be built in native sticker mode"
+
+            snapshot = {
+                "matching_ids": ["old-id"],
+                "matching_count": 1,
+                "identified_outgoing_count": 3,
+                "outgoing_count": 3,
+            }
+            item = StickerItem()
+            with patch.dict("os.environ", {"SEND_STATE_FILE": str(path)}), patch.object(
+                delivery, "active_conversation", return_value="Ken"
+            ), patch.object(
+                delivery,
+                "_prepare_native_sticker",
+                return_value=(item, "resource-key", snapshot),
+            ) as prepare, patch.object(
+                delivery, "verify_sticker_persisted", return_value=False
+            ):
+                config = {
+                    "deliveryMode": "native_sticker",
+                    "nativeStickerName": "续火花",
+                }
+                first = delivery.deliver_once(
+                    object(), page=object(), username="account", friend="Ken",
+                    message_factory=message_factory, config=config, logger=Logger(),
+                    select_friend=lambda *args: iter(()),
+                )
+                second = delivery.deliver_once(
+                    object(), page=object(), username="account", friend="Ken",
+                    message_factory=message_factory, config=config, logger=Logger(),
+                    select_friend=lambda *args: iter(()),
+                )
+
+            self.assertFalse(first)
+            self.assertFalse(second)
+            self.assertEqual(clicks["count"], 1)
+            self.assertEqual(built["count"], 0)
+            self.assertEqual(prepare.call_count, 1)
+
+    def test_attempted_native_sticker_is_verification_only_and_can_confirm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            day = delivery._today()
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "days": {
+                            day: {
+                                "account": {
+                                    "Ken": {
+                                        "status": "attempted",
+                                        "delivery_kind": "douyin_sticker",
+                                        "sticker_name": "续火花",
+                                        "resource_key": "resource-key",
+                                        "baseline_message_ids": ["old-id"],
+                                        "baseline_count": 1,
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            built = {"count": 0}
+
+            def message_factory():
+                built["count"] += 1
+                return "must not be built"
+
+            class Logger:
+                def info(self, *args): pass
+                def warning(self, *args): pass
+                def error(self, *args): pass
+
+            with patch.dict("os.environ", {"SEND_STATE_FILE": str(path)}), patch.object(
+                delivery, "verify_sticker_persisted", return_value=True
+            ) as verify, patch.object(delivery, "_prepare_native_sticker") as prepare:
+                result = delivery.deliver_once(
+                    object(), object(), "account", "Ken", message_factory,
+                    {"deliveryMode": "native_sticker"}, Logger(), lambda *args: iter(()),
+                )
+
+            self.assertTrue(result)
+            self.assertEqual(built["count"], 0)
+            prepare.assert_not_called()
+            verify.assert_called_once()
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                saved["days"][day]["account"]["Ken"]["status"],
+                "confirmed",
+            )
 
     def test_corrupt_state_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:

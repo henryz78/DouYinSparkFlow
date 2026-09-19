@@ -5,6 +5,7 @@ import re
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from utils import norm
 
@@ -17,6 +18,10 @@ SEND_BUTTON_SELECTOR = ".e2e-send-msg-btn"
 RIGHT_PANEL_TITLE_SELECTOR = ".RightPanelHeadertitle"
 TRUST_LOGIN_DIALOG_SELECTOR = ".trust-login-dialog-mask"
 OUTGOING_MESSAGE_SELECTOR = ".messageMessageBoxcontentBox.messageMessageBoxisFromMe"
+STICKER_BUTTON_SELECTOR = "svg.messageMsgInputiconAction"
+STICKER_PANEL_SELECTOR = ".componentsemojiemojiPanel"
+STICKER_ITEM_SELECTOR = ".emojiEmojiItememojiItem"
+STICKER_DESC_SELECTOR = ".emojiEmojiItememojiItemDesc"
 INPUT_TOKEN_RE = re.compile(r"(\[[^\[\]\n]+\]|\n)")
 
 
@@ -268,6 +273,134 @@ def _outgoing_match_count(page, expected: str) -> int:
     return sum(1 for text in texts if _canonical_match_text(text) == expected)
 
 
+def _sticker_resource_key(src: str) -> str:
+    """Return the stable basename Douyin uses for one native sticker asset."""
+    try:
+        return urlsplit(src or "").path.rsplit("/", 1)[-1]
+    except Exception:
+        return ""
+
+
+def _outgoing_sticker_snapshot(page, resource_key: str) -> dict:
+    """Snapshot matching native stickers and their stable virtual message IDs."""
+    resource_key = str(resource_key or "").strip()
+    empty = {
+        "matching_ids": [],
+        "matching_count": 0,
+        "identified_outgoing_count": 0,
+        "outgoing_count": 0,
+    }
+    if not resource_key:
+        return dict(empty)
+    try:
+        snapshot = page.evaluate(
+            """
+            (resourceKey) => {
+              const boxes = Array.from(document.querySelectorAll(
+                '.messageMessageBoxcontentBox.messageMessageBoxisFromMe'
+              ));
+
+              function virtualIdFor(box) {
+                const row = box.closest('[data-index]');
+                if (!row || !row.parentElement) return '';
+                const index = Number(row.getAttribute('data-index'));
+                if (!Number.isInteger(index) || index < 0) return '';
+                const host = row.parentElement;
+                const roots = [];
+                for (const key of Object.keys(host)) {
+                  try {
+                    if (key.startsWith('__reactProps$')) {
+                      roots.push(host[key] && host[key].children);
+                    } else if (key.startsWith('__reactFiber$')) {
+                      roots.push(host[key] && host[key].pendingProps && host[key].pendingProps.children);
+                    }
+                  } catch (_) {}
+                }
+                for (const root of roots) {
+                  const children = Array.isArray(root) ? root : [root];
+                  const child = children[index];
+                  const id = child && child.props && child.props.virtualItem && child.props.virtualItem.id;
+                  if (id) return String(id);
+                }
+                return '';
+              }
+
+              const matchingIds = [];
+              let matchingCount = 0;
+              let identifiedOutgoingCount = 0;
+              for (const box of boxes) {
+                const id = virtualIdFor(box);
+                if (id) identifiedOutgoingCount += 1;
+                const matches = Array.from(box.querySelectorAll('img')).some(
+                  image => String(image.getAttribute('src') || '').includes(resourceKey)
+                );
+                if (!matches) continue;
+                matchingCount += 1;
+                if (id) matchingIds.push(id);
+              }
+              return {
+                matching_ids: matchingIds,
+                matching_count: matchingCount,
+                identified_outgoing_count: identifiedOutgoingCount,
+                outgoing_count: boxes.length,
+              };
+            }
+            """,
+            resource_key,
+        )
+    except Exception:
+        return dict(empty)
+    if not isinstance(snapshot, dict):
+        return dict(empty)
+    snapshot["matching_ids"] = [
+        str(value) for value in snapshot.get("matching_ids", []) if value
+    ]
+    for key in ("matching_count", "identified_outgoing_count", "outgoing_count"):
+        snapshot[key] = int(snapshot.get(key, 0) or 0)
+    return snapshot
+
+
+def _prepare_native_sticker(page, sticker_name: str, config):
+    """Open sticker panel and return exact item without clicking the item."""
+    sticker_name = norm(sticker_name)
+    if not sticker_name:
+        raise RuntimeError("原生贴纸名称为空")
+
+    panel = page.locator(STICKER_PANEL_SELECTOR).first
+    try:
+        panel_visible = bool(panel.count() and panel.is_visible())
+    except Exception:
+        panel_visible = False
+    if not panel_visible:
+        button = page.locator(STICKER_BUTTON_SELECTOR)
+        if button.count() == 0 or not button.first.is_visible():
+            raise RuntimeError("未找到可见的抖音表情按钮")
+        # CloakBrowser 当前页面上物理 click 不会触发这个 React 控件。
+        # synthetic click 这里只打开面板，不发送任何消息。
+        button.first.dispatch_event("click")
+        page.wait_for_selector(
+            STICKER_PANEL_SELECTOR,
+            state="visible",
+            timeout=min(config.get("browserTimeout", 120_000), 10_000),
+        )
+        panel = page.locator(STICKER_PANEL_SELECTOR).first
+
+    items = panel.locator(STICKER_ITEM_SELECTOR)
+    for index in range(items.count()):
+        item = items.nth(index)
+        desc = item.locator(STICKER_DESC_SELECTOR)
+        if not desc.count() or norm(desc.first.inner_text()) != sticker_name:
+            continue
+        image = item.locator("img").first
+        src = image.get_attribute("src") if image.count() else ""
+        resource_key = _sticker_resource_key(src)
+        if not resource_key:
+            raise RuntimeError(f"原生贴纸 {sticker_name} 缺少可验证的资源标识")
+        return item, resource_key, _outgoing_sticker_snapshot(page, resource_key)
+
+    raise RuntimeError(f"在抖音表情面板中找不到原生贴纸: {sticker_name}")
+
+
 def _type_message(page, username: str, friend: str, message: str, config):
     page.wait_for_selector(
         CHAT_EDITABLE_SELECTOR,
@@ -347,6 +480,41 @@ def verify_persisted(
     return False
 
 
+def verify_sticker_persisted(
+    context,
+    username: str,
+    target: str,
+    resource_key: str,
+    baseline_message_ids,
+    config,
+    logger,
+    select_friend,
+    attempts: int = 3,
+    delay: float = 5,
+) -> bool:
+    """Fresh-page verify a native sticker by a newly persisted message ID."""
+    baseline_ids = {str(value) for value in (baseline_message_ids or []) if value}
+    for attempt in range(max(1, attempts)):
+        verify_page = context.new_page()
+        try:
+            verify_page.goto("https://www.douyin.com/chat", wait_until="domcontentloaded")
+            if _open_target(verify_page, username, target, config, logger, select_friend):
+                time.sleep(1)
+                snapshot = _outgoing_sticker_snapshot(verify_page, resource_key)
+                current_ids = set(snapshot["matching_ids"])
+                if current_ids - baseline_ids:
+                    return True
+        except Exception as exc:
+            logger.warning(
+                f"账号 {username} 好友 {target} 第 {attempt + 1}/{attempts} 次贴纸持久化检查失败：{exc}"
+            )
+        finally:
+            verify_page.close()
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    return False
+
+
 def deliver_once(
     context,
     page,
@@ -367,18 +535,37 @@ def deliver_once(
         return True
 
     if record.get("status") == "attempted":
-        expected = _verification_text_from_record(record)
-        baseline = int(record.get("baseline_count", 0) or 0)
-        if expected and verify_persisted(
-            context,
-            username,
-            friend,
-            expected,
-            baseline,
-            config,
-            logger,
-            select_friend,
-        ):
+        delivery_kind = record.get("delivery_kind", "text")
+        confirmed = False
+        if delivery_kind == "douyin_sticker":
+            resource_key = str(record.get("resource_key") or "")
+            baseline_ids = record.get("baseline_message_ids") or []
+            if resource_key:
+                confirmed = verify_sticker_persisted(
+                    context,
+                    username,
+                    friend,
+                    resource_key,
+                    baseline_ids,
+                    config,
+                    logger,
+                    select_friend,
+                )
+        else:
+            expected = _verification_text_from_record(record)
+            baseline = int(record.get("baseline_count", 0) or 0)
+            if expected:
+                confirmed = verify_persisted(
+                    context,
+                    username,
+                    friend,
+                    expected,
+                    baseline,
+                    config,
+                    logger,
+                    select_friend,
+                )
+        if confirmed:
             record["status"] = "confirmed"
             record["confirmed_at"] = time.time()
             _set_record(state, username, friend, record)
@@ -396,6 +583,85 @@ def deliver_once(
             f"当前 {active_conversation(page) or '未打开'}"
         )
 
+    delivery_mode = str(config.get("deliveryMode", "text") or "text").strip().lower()
+    if delivery_mode == "native_sticker":
+        sticker_name = norm(config.get("nativeStickerName", "续火花"))
+        item, resource_key, baseline_snapshot = _prepare_native_sticker(
+            page, sticker_name, config
+        )
+
+        # If Douyin changes the virtual-list internals, fail before the
+        # irreversible click rather than silently degrading to a weak counter.
+        if (
+            baseline_snapshot["outgoing_count"] > 0
+            and baseline_snapshot["identified_outgoing_count"] == 0
+        ):
+            raise RuntimeError("无法读取抖音消息稳定 ID，已阻止原生贴纸发送")
+        if len(baseline_snapshot["matching_ids"]) < baseline_snapshot["matching_count"]:
+            raise RuntimeError("部分历史同款贴纸缺少稳定消息 ID，已阻止原生贴纸发送")
+
+        # Opening the popup must never weaken recipient binding. Re-check the
+        # active title immediately before recording attempted + dispatching.
+        if active_conversation(page) != friend:
+            raise RuntimeError(
+                f"账号 {username} 贴纸发送前会话校验失败：目标 {friend}，"
+                f"当前 {active_conversation(page) or '未打开'}"
+            )
+
+        record = {
+            "status": "attempted",
+            "delivery_kind": "douyin_sticker",
+            "sticker_name": sticker_name,
+            "resource_key": resource_key,
+            "baseline_message_ids": baseline_snapshot["matching_ids"],
+            "baseline_count": baseline_snapshot["matching_count"],
+            "attempted_at": time.time(),
+        }
+        _set_record(state, username, friend, record)
+
+        try:
+            # This is the only irreversible UI action. Never click again and
+            # never press the regular send button as an automatic fallback.
+            item.dispatch_event("click")
+        except Exception as exc:
+            record["dispatch_error"] = str(exc)
+            _set_record(state, username, friend, record)
+            logger.error(
+                f"账号 {username} 好友 {friend} 原生贴纸事件结果未知：{exc}；"
+                "已进入 at-most-once 保护，不会自动重发"
+            )
+        else:
+            logger.info(
+                f"账号 {username} 已向好友 {friend} 派发 1 次原生贴纸 {sticker_name}"
+            )
+
+        if verify_sticker_persisted(
+            context,
+            username,
+            friend,
+            resource_key,
+            baseline_snapshot["matching_ids"],
+            config,
+            logger,
+            select_friend,
+        ):
+            record["status"] = "confirmed"
+            record["confirmed_at"] = time.time()
+            _set_record(state, username, friend, record)
+            logger.info(
+                f"账号 {username} 好友 {friend} 已通过全新页面确认原生贴纸持久化"
+            )
+            return True
+
+        logger.error(
+            f"账号 {username} 好友 {friend} 原生贴纸暂未确认服务器持久化；"
+            "状态保留 attempted，本日不会自动重发"
+        )
+        return False
+
+    if delivery_mode != "text":
+        raise RuntimeError(f"不支持的 DELIVERY_MODE: {delivery_mode}")
+
     message = message_factory()
     _type_message(page, username, friend, message, config)
     expected = _verification_text(message)
@@ -409,6 +675,7 @@ def deliver_once(
     # 先落 attempted 再触发发送：即使进程恰好在 click 附近崩溃，也不会自动重发。
     record = {
         "status": "attempted",
+        "delivery_kind": "text",
         "verification_text": expected,
         "baseline_count": baseline,
         "attempted_at": time.time(),
