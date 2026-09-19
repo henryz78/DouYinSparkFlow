@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import tempfile
 import time
@@ -16,6 +17,49 @@ SEND_BUTTON_SELECTOR = ".e2e-send-msg-btn"
 RIGHT_PANEL_TITLE_SELECTOR = ".RightPanelHeadertitle"
 TRUST_LOGIN_DIALOG_SELECTOR = ".trust-login-dialog-mask"
 OUTGOING_MESSAGE_SELECTOR = ".messageMessageBoxcontentBox.messageMessageBoxisFromMe"
+INPUT_TOKEN_RE = re.compile(r"(\[[^\[\]\n]+\]|\n)")
+
+
+def human_pause(low: float, high: float) -> None:
+    """Small randomized pause used only for visible user-like pacing."""
+    if high < low:
+        low, high = high, low
+    time.sleep(random.uniform(max(0.0, low), max(0.0, high)))
+
+
+def _message_input_tokens(message: str) -> list[tuple[str, str]]:
+    """Split text into human-typed text, atomic emoji shortcodes, and newlines."""
+    normalized = (message or "").replace("\\n", "\n")
+    tokens: list[tuple[str, str]] = []
+    for part in INPUT_TOKEN_RE.split(normalized):
+        if not part:
+            continue
+        if part == "\n":
+            tokens.append(("newline", part))
+        elif part.startswith("[") and part.endswith("]"):
+            tokens.append(("shortcode", part))
+        else:
+            tokens.append(("text", part))
+    return tokens
+
+
+def _human_insert_text(page, text: str) -> None:
+    """Type visibly one character at a time without relying on raw key events.
+
+    Douyin's Slate editor ignores part of CloakBrowser's ASCII keydown/keyup
+    path, while insert_text is reliable for both CJK and ASCII. Per-character
+    insertion plus randomized pacing keeps the visible typing gradual.
+    """
+    for index, char in enumerate(text):
+        page.keyboard.insert_text(char)
+        if index >= len(text) - 1:
+            continue
+        if char in "，。！？；：,.!?;:":
+            human_pause(0.08, 0.22)
+        elif char.isspace():
+            human_pause(0.03, 0.09)
+        else:
+            human_pause(0.035, 0.13)
 
 
 def _state_path() -> Path:
@@ -202,15 +246,26 @@ def _verification_text_from_record(record: dict) -> str:
     )
 
 
+def _canonical_match_text(text: str) -> str:
+    """Canonical form for persisted-message matching.
+
+    Douyin's rich-text editor can collapse spaces adjacent to native emoji
+    nodes or turn them into line breaks.  Those whitespace-only differences
+    are presentation details, so matching ignores whitespace while preserving
+    every non-whitespace character.
+    """
+    return re.sub(r"\s+", "", norm(text or ""))
+
+
 def _outgoing_match_count(page, expected: str) -> int:
-    expected = norm(expected)
+    expected = _canonical_match_text(expected)
     if not expected:
         return 0
     try:
         texts = page.locator(OUTGOING_MESSAGE_SELECTOR).all_inner_texts()
     except Exception:
         return 0
-    return sum(1 for text in texts if norm(text) == expected)
+    return sum(1 for text in texts if _canonical_match_text(text) == expected)
 
 
 def _type_message(page, username: str, friend: str, message: str, config):
@@ -230,8 +285,18 @@ def _type_message(page, username: str, friend: str, message: str, config):
             f"账号 {username} 好友 {friend} 输入框存在无法清理的旧草稿，已阻止发送"
         )
     editor.focus()
-    # insert_text 会保留抖音隐藏 emoji 的 [display_name] 短码和真实换行。
-    page.keyboard.insert_text(message.replace("\\n", "\n"))
+    for kind, value in _message_input_tokens(message):
+        if kind == "shortcode":
+            # 抖音会在逐字输入过程中提前解析 [display_name]；整块插入才稳定。
+            page.keyboard.insert_text(value)
+            human_pause(0.06, 0.16)
+        elif kind == "newline":
+            # 官方实现使用 Shift+Enter；保留键盘路径，不把换行当成整段文本注入。
+            editor.press("Shift+Enter", force=True)
+            human_pause(0.06, 0.18)
+        else:
+            _human_insert_text(page, value)
+    human_pause(0.25, 0.65)
     if not norm(editor.inner_text()):
         raise RuntimeError(f"账号 {username} 好友 {friend} 输入后仍为空，已阻止发送")
 

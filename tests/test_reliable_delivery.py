@@ -10,12 +10,22 @@ from core import reliable_delivery as delivery
 class _Editor:
     def __init__(self):
         self.text = ""
+        self.actions = []
 
     def inner_text(self):
         return self.text
 
     def focus(self):
         return None
+
+    def type(self, text, force=False):
+        self.actions.append(("type", text, force))
+        self.text += text
+
+    def press(self, key, force=False):
+        self.actions.append(("press", key, force))
+        if key == "Shift+Enter":
+            self.text += "\n"
 
 
 class _Locator:
@@ -26,15 +36,16 @@ class _Locator:
 class _Keyboard:
     def __init__(self, editor):
         self.editor = editor
-        self.inserted = None
+        self.inserted = []
 
     def press(self, key):
         if key == "Backspace":
             self.editor.text = ""
 
     def insert_text(self, text):
-        self.inserted = text
-        self.editor.text = text
+        self.inserted.append(text)
+        self.editor.actions.append(("insert_text", text))
+        self.editor.text += text
 
 
 class _Page:
@@ -52,16 +63,79 @@ class _Page:
 class ReliableDeliveryTests(unittest.TestCase):
     def test_input_preserves_native_emoji_shortcodes_and_newlines(self):
         page = _Page()
-        delivery._type_message(
-            page,
-            "account",
-            "Ken",
-            "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n正文",
-            {"browserTimeout": 1000},
+        with patch.object(delivery, "human_pause"):
+            delivery._type_message(
+                page,
+                "account",
+                "Ken",
+                "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n正文",
+                {"browserTimeout": 1000},
+            )
+        self.assertEqual(
+            page.editor.text,
+            "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n正文",
         )
         self.assertEqual(
             page.keyboard.inserted,
-            "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n正文",
+            [
+                "[盖瑞]", "今", "日", "火", "花", "[加一]",
+                "—", "—", " ", "[右边]", " ", "每", "日", "一", "言", " ",
+                "[左边]", " ", "—", "—", "正", "文",
+            ],
+        )
+        self.assertEqual(
+            [action for action in page.editor.actions if action[0] == "press"],
+            [("press", "Shift+Enter", True), ("press", "Shift+Enter", True)],
+        )
+
+    def test_message_input_tokens_only_make_shortcodes_atomic(self):
+        self.assertEqual(
+            delivery._message_input_tokens("普通文字[盖瑞]继续\\n下一行"),
+            [
+                ("text", "普通文字"),
+                ("shortcode", "[盖瑞]"),
+                ("text", "继续"),
+                ("newline", "\n"),
+                ("text", "下一行"),
+            ],
+        )
+
+    def test_human_insert_text_preserves_ascii_spaces_and_shift_symbols(self):
+        page = _Page()
+        with patch.object(delivery, "human_pause"):
+            delivery._human_insert_text(page, "中文 ABC (括号) 123 OK")
+        self.assertEqual(page.editor.text, "中文 ABC (括号) 123 OK")
+
+    def test_outgoing_match_ignores_whitespace_only_differences(self):
+        class Messages:
+            def all_inner_texts(self):
+                return ["今日火花\n—— \n 每日一言 \n ——且壮士不死则已"]
+
+        class Page:
+            def locator(self, selector):
+                return Messages()
+
+        self.assertEqual(
+            delivery._outgoing_match_count(
+                Page(), "今日火花 —— 每日一言 —— 且壮士不死则已"
+            ),
+            1,
+        )
+
+    def test_outgoing_match_still_requires_same_non_whitespace_text(self):
+        class Messages:
+            def all_inner_texts(self):
+                return ["今日火花\n——\n每日一言\n——完全不同的正文"]
+
+        class Page:
+            def locator(self, selector):
+                return Messages()
+
+        self.assertEqual(
+            delivery._outgoing_match_count(
+                Page(), "今日火花 —— 每日一言 —— 正确正文"
+            ),
+            0,
         )
 
     def test_state_keeps_thirty_days(self):

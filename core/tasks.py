@@ -7,6 +7,7 @@ from core.browser import get_browser
 from core.reliable_delivery import (
     activate_conversation,
     deliver_once,
+    human_pause,
     pending_targets,
     wait_chat_ready,
 )
@@ -104,6 +105,7 @@ def scroll_and_select_user(page, username, targets):
                     activate_conversation(
                         page, element, username, targetSymbol, config, logger
                     )
+                    human_pause(0.25, 0.85)
                     found_targets.add(targetName)
                     yield targetSymbol
 
@@ -220,6 +222,7 @@ def do_user_task(browser, username, cookies, targets):
         wait_until="domcontentloaded",
     )
     wait_chat_ready(page, config, logger)
+    human_pause(0.45, 1.25)
 
     targets = pending_targets(username, targets, logger)
     if not targets:
@@ -243,6 +246,7 @@ def do_user_task(browser, username, cookies, targets):
             scroll_and_select_user,
         ):
             unresolved.append(friend)
+        human_pause(0.65, 1.75)
 
     context.close()  # 任务完成后关闭上下文
     if unresolved:
