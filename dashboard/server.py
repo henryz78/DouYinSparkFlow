@@ -174,9 +174,10 @@ def build_snapshot() -> dict:
     attempted_today = sum(1 for r in today_rows if r["status"] == "attempted")
 
     schedule = _read_json(LOGS_DIR / "random-run-schedule.json", {})
-    target_local = schedule.get("target_local") if isinstance(schedule, dict) else None
+    schedule_is_today = isinstance(schedule, dict) and schedule.get("day") == today
+    target_local = schedule.get("target_local") if schedule_is_today else None
     target_display = None
-    target_epoch = schedule.get("target_epoch") if isinstance(schedule, dict) else None
+    target_epoch = schedule.get("target_epoch") if schedule_is_today else None
     if target_epoch is not None:
         try:
             target_display = datetime.fromtimestamp(float(target_epoch), tz).strftime("%H:%M:%S")
@@ -187,7 +188,7 @@ def build_snapshot() -> dict:
         phase = "completed"
     elif attempted_today:
         phase = "running"
-    elif schedule.get("day") == today and schedule.get("completed"):
+    elif schedule_is_today and schedule.get("completed"):
         phase = "completed"
     elif target_epoch is not None:
         try:
@@ -237,7 +238,7 @@ def build_snapshot() -> dict:
             "window_seconds": int(values.get("CRON_RANDOM_WINDOW_SECONDS", "0") or 0),
             "target": target_display,
             "target_local": target_local,
-            "completed": bool(schedule.get("completed")) if isinstance(schedule, dict) else False,
+            "completed": bool(schedule.get("completed")) if schedule_is_today else False,
         },
         "today_status": {
             "phase": phase,
