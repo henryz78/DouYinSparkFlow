@@ -56,7 +56,7 @@ def do_user_task(browser, username, cookies, targets):
                 "ERROR": "内部错误",
             }.get(res.get("status"), res.get("status"))
             logger.error(f"账号 {username} 操作前检查未通过：{reason}，跳过该账号")
-            return
+            raise RuntimeError(f"账号 {username} 操作前检查未通过：{reason}")
 
         logger.info(
             f"账号 {username} 门禁通过  user_id={res.get('user_id')} "
@@ -113,6 +113,21 @@ def do_user_task(browser, username, cookies, targets):
                 f"账号 {username} 找到但选中失败：{scan['select_failed']}"
             )
 
+        # 找到但没有选中、或发送未确认，都必须让任务失败；否则调度器会把
+        # "发送 0 条" 当成正常完成，下一轮又无法区分真正的成功。
+        reasons = []
+        if scan.get("missing"):
+            reasons.append(f"未找到目标={scan['missing']}")
+        if scan.get("select_failed"):
+            reasons.append(f"选中失败={scan['select_failed']}")
+        if sent_fail:
+            reasons.append(f"发送失败={sent_fail}")
+        expected = len(set(targets))
+        if sent_ok != expected:
+            reasons.append(f"发送成功={sent_ok}/{expected}")
+        if reasons:
+            raise RuntimeError(f"账号 {username} 任务未完成：" + "；".join(reasons))
+
         folds = im.fold_groups()
         if any(v for v in folds.values() if v):
             logger.warning(
@@ -157,4 +172,3 @@ def runTasks():
         finally:
             # 关闭浏览器实例
             browser.close()
-    

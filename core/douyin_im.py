@@ -111,8 +111,8 @@ JS_LIST_READY = """(() => {
     if (!t || !t.textContent.trim()) blank++;
   });
   if (blank > 0) return { ready: false, why: 'title-blank', blank, count: items.length };
-  const img = items[0].querySelector('img');
-  if (img && !img.complete) return { ready: false, why: 'avatar-loading', count: items.length };
+  // 头像是装饰资源，不是会话数据门禁。抖音/CDN 图片可能长期保持
+  // complete=false；61bddaa 的稳定路径只等待列表项和容器可用。
   const box = document.querySelector('.conversationConversationListwrapper');
   if (!box || box.clientHeight <= 0) return { ready: false, why: 'no-container', count: items.length };
   return { ready: true, count: items.length };
@@ -1684,7 +1684,12 @@ class DouyinIM:
         if not text:
             raise ValueError("text is empty")
 
-        # ① 草稿残留自查：上一条没清干净会导致两条消息串发
+        # ① 草稿残留自查：上一条没清干净会导致两条消息串发。
+        # 61bddaa 的稳定路径用真实编辑器焦点和 Ctrl+A/Backspace，
+        # 不依赖 Slate 的 execCommand 清除。
+        editor = self._editor()
+        if editor is None:
+            raise RuntimeError("找不到聊天输入框")
         try:
             empty = self.page.evaluate(JS_EDITOR_EMPTY)
         except Exception:
@@ -1692,25 +1697,32 @@ class DouyinIM:
         if empty is False:
             logger.debug("[SEND] ⚠️ 输入框已有内容（草稿残留），先清空")
             try:
-                self.page.evaluate(JS_EDITOR_CLEAR)
+                editor.focus()
+                self.page.keyboard.press("Control+A")
+                self.page.keyboard.press("Backspace")
                 self.page.wait_for_timeout(200)
             except Exception:
                 pass
+            try:
+                if self.page.evaluate(JS_EDITOR_EMPTY) is False:
+                    raise RuntimeError("输入框旧草稿无法清空，已阻止发送")
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
 
-        # ② 输入。用 contenteditable 本体，humanize 的「可编辑」检查能过
-        editor = self._editor()
-        if editor is None:
-            raise RuntimeError("找不到聊天输入框")
-        editor.click()
-        # 两种换行都认（口径见 split_message_lines 的文档）
-        lines = split_message_lines(text)
-        if text != "\n".join(lines):
-            logger.debug(f"[SEND] 换行归一：{text!r} → {lines!r}")
-        for i, line in enumerate(lines):
-            if line:
-                self.page.keyboard.type(line)
-            if i != len(lines) - 1:
-                self.page.keyboard.press("Shift+Enter")
+        # ② 输入。官方 keyboard.type 会在 Douyin Slate 中吞掉 ASCII、空格和括号；
+        # 61bddaa 已验证一次性 insert_text 能保留完整正文，不叠加后续拟人化延迟。
+        editor.focus()
+        self.page.keyboard.insert_text(text.replace("\\n", "\n"))
+
+        try:
+            if self.page.evaluate(JS_EDITOR_EMPTY) is True:
+                raise RuntimeError("输入后编辑器仍为空，已阻止发送")
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
 
         sends_before = len(self.mon.sends)
         msg_before = self._msg_state()
@@ -1764,15 +1776,12 @@ class DouyinIM:
             return {}
 
     def _click_send(self):
-        try:
-            btn = self.page.locator(SEL_SEND_BTN_READY).first
-            if btn.count() > 0 and btn.is_visible():
-                btn.click()
-                return "button"
-        except Exception:
-            pass
-        self.page.keyboard.press("Enter")
-        return "enter"
+        btn = self.page.locator(SEL_SEND_BTN_READY).first
+        if btn.count() == 0 or not btn.is_visible():
+            raise RuntimeError("未找到可见的抖音发送按钮")
+        # 61bddaa 的发送路径：单次 synthetic click。发送按钮不能套用会话选择 fallback。
+        btn.dispatch_event("click")
+        return "button"
 
     def _wait_receipt(self, sends_before, msg_before, text, timeout):
         """回执双确认：HTTP 监听（权威）+ DOM（WS 通道下补位）。"""
