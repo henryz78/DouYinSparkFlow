@@ -226,4 +226,15 @@ These stayed unchanged during isolated stability testing.
 - Selection-integration code is committed as `0f8524c` (`WIP harden conversation selection`). It is an experimental checkpoint, not production-ready and not deployed.
 - The next agent should treat `main` as pure official v3.2.1, `custom-pre-v3.2.1` as the previous stable/custom line (plus native-sticker WIP), and `integrate-v3.2.1` as the experimental official-based selection-integration line.
 
-- Last updated: 2026-09-19 12:58 PDT
+## Final cross-agent handoff
+
+- The user is handing this project to another Agent. Start by reading this file and verifying Git/container state before changing anything.
+- Branch ownership is intentional:
+  - `main` must remain byte-for-byte aligned with official `origin/main` at v3.2.1 unless the user explicitly changes that policy;
+  - `custom-pre-v3.2.1` is the preserved pre-v3.2.1 custom/stable line, including reliability/humanization work and native-sticker WIP;
+  - `integrate-v3.2.1` is the official-based experimental line containing the conversation-selection hardening work.
+- `.mcp/PROGRESS.md` is now intentionally tracked on the custom/integration branches for cross-agent continuity. Other `.mcp/` diagnostics remain locally ignored and should not be committed by default.
+- Formal production is still running the previous custom/stable Docker image. Neither official v3.2.1 nor `integrate-v3.2.1` has been deployed to production.
+- Before any future merge/deploy, re-check the official upstream, current production state files, target list, and all relevant tests. Do not assume the experimental integration branch is production-ready solely because its no-send selection tests passed.
+
+- Last updated: 2026-09-19 13:45 PDT
