@@ -262,6 +262,142 @@ class _NoWaitPage:
         pass
 
 
+class _SelectionStub(_Stub):
+    def __init__(self, physical_success=False, fallback_success=True):
+        self._state = {"user_id": ME}
+        self.page = _NoWaitPage()
+        self.current_id = None
+        self._physical_select_degraded = False
+        self.physical_success = physical_success
+        self.fallback_success = fallback_success
+        self.physical_calls = 0
+        self.synthetic_calls = 0
+
+    def _dom_index_of(self, conv_id):
+        return 0
+
+    def _mouse_select(self, index, want=None):
+        self.physical_calls += 1
+        if self.physical_success:
+            self.current_id = want
+        return True
+
+    def _current_conv(self):
+        if not self.current_id:
+            return None
+        return {"convId": self.current_id, "title": "Target"}
+
+    def _synthetic_select(self, conv_id, data_index=0):
+        self.synthetic_calls += 1
+        if self.fallback_success:
+            self.current_id = conv_id
+            return True
+        return False
+
+
+class SelectionFallbackTests(unittest.TestCase):
+    ITEM = {"conv_id": "0:1:1:2", "data_index": 0}
+
+    def test_physical_success_does_not_use_fallback(self):
+        s = _SelectionStub(physical_success=True)
+        self.assertTrue(s._select_and_verify(dict(self.ITEM), attempts=3))
+        self.assertEqual(s.physical_calls, 1)
+        self.assertEqual(s.synthetic_calls, 0)
+
+    def test_physical_failure_uses_one_safe_fallback(self):
+        s = _SelectionStub(physical_success=False, fallback_success=True)
+        self.assertTrue(s._select_and_verify(dict(self.ITEM), attempts=2))
+        self.assertEqual(s.physical_calls, 2)
+        self.assertEqual(s.synthetic_calls, 1)
+        self.assertEqual(s.current_id, self.ITEM["conv_id"])
+
+    def test_failed_fallback_reports_selection_failure(self):
+        s = _SelectionStub(physical_success=False, fallback_success=False)
+        self.assertFalse(s._select_and_verify(dict(self.ITEM), attempts=2))
+        self.assertEqual(s.physical_calls, 2)
+        self.assertEqual(s.synthetic_calls, 1)
+
+    def test_repeated_physical_failure_circuit_breaks_for_session(self):
+        s = _SelectionStub(physical_success=False, fallback_success=True)
+        self.assertTrue(s._select_and_verify(dict(self.ITEM), attempts=2))
+        self.assertTrue(s._physical_select_degraded)
+        self.assertEqual(s.physical_calls, 2)
+        self.assertEqual(s.synthetic_calls, 1)
+
+        # Move to another target in the same browser/IM session: physical mouse
+        # is skipped and the safe reversible selection fallback is used directly.
+        s.current_id = None
+        second = {"conv_id": "0:1:1:3", "data_index": 1}
+        self.assertTrue(s._select_and_verify(second, attempts=3))
+        self.assertEqual(s.physical_calls, 2)
+        self.assertEqual(s.synthetic_calls, 2)
+        self.assertEqual(s.current_id, second["conv_id"])
+
+
+class _MouseRecorder:
+    def __init__(self):
+        self.moves = []
+        self.downs = 0
+        self.ups = 0
+
+    def move(self, x, y):
+        self.moves.append((x, y))
+
+    def down(self):
+        self.downs += 1
+
+    def up(self):
+        self.ups += 1
+
+
+class _MouseElement:
+    def scroll_into_view_if_needed(self):
+        pass
+
+    def bounding_box(self):
+        return {"x": 10, "y": 20, "width": 200, "height": 60}
+
+
+class _MouseHandle:
+    def as_element(self):
+        return _MouseElement()
+
+
+class _MousePage(_NoWaitPage):
+    def __init__(self):
+        self.mouse = _MouseRecorder()
+
+    def evaluate_handle(self, script, index):
+        return _MouseHandle()
+
+
+class _MouseSelectStub(_Stub):
+    def __init__(self, under_conv_id):
+        self._state = {"user_id": ME}
+        self.page = _MousePage()
+        self.under_conv_id = under_conv_id
+
+    def _wait_selection_window_stable(self, timeout_ms=900, interval_ms=120):
+        return True
+
+    def _conv_at_point(self, x, y):
+        return {"convId": self.under_conv_id, "title": "UnderMouse"}
+
+
+class MouseSelectRaceTests(unittest.TestCase):
+    def test_reordered_target_is_not_clicked(self):
+        s = _MouseSelectStub("other-conversation")
+        self.assertFalse(s._mouse_select(0, "wanted-conversation"))
+        self.assertEqual(s.page.mouse.downs, 0)
+        self.assertEqual(s.page.mouse.ups, 0)
+
+    def test_matching_target_gets_one_press_release(self):
+        s = _MouseSelectStub("wanted-conversation")
+        self.assertTrue(s._mouse_select(0, "wanted-conversation"))
+        self.assertEqual(s.page.mouse.downs, 1)
+        self.assertEqual(s.page.mouse.ups, 1)
+
+
 class _VListStub(_Stub):
     """模拟虚拟化会话列表：DOM 里恒只有「窗口内」那几条，滚动时窗口整体下移。
 

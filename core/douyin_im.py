@@ -209,8 +209,15 @@ JS_WINDOW_FINGERPRINT = """(() => {
     const h = el.closest('[data-index]');
     return h ? Number(h.getAttribute('data-index')) : null;
   }).filter(v => v !== null);
+  const order = items.map(el => {
+    const h = el.closest('[data-index]');
+    const t = el.querySelector('.conversationConversationItemtitle');
+    const dataIndex = h ? h.getAttribute('data-index') : '';
+    const title = t ? t.textContent.replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim() : '';
+    return `${dataIndex}:${title}`;
+  });
   return { count: items.length, minIndex: idx.length ? Math.min(...idx) : null,
-           maxIndex: idx.length ? Math.max(...idx) : null };
+           maxIndex: idx.length ? Math.max(...idx) : null, order };
 })()"""
 
 JS_EDITOR_EMPTY = """(() => {
@@ -255,6 +262,40 @@ JS_CURRENT_CONV = """(() => {
   }
   return { index: idx, title, convId };
 })()"""
+
+# 鼠标真正按下前确认坐标下仍是目标会话。会话列表会在收发消息/IM 同步时重排，
+# 所以不能把几百毫秒前算出来的 DOM index / bounding box 当成稳定身份。
+JS_CONV_AT_POINT = """([x, y]) => {
+  let el = document.elementFromPoint(x, y);
+  el = el && el.closest ? el.closest('[data-e2e="conversation-item"]') : null;
+  if (!el) return null;
+  const t = el.querySelector('.conversationConversationItemtitle');
+  const title = t ? t.textContent.replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim() : null;
+  const idx = [...document.querySelectorAll('[data-e2e="conversation-item"]')].indexOf(el);
+  let convId = null;
+  const keys = Object.keys(el).filter(k => k.startsWith('__reactProps$') || k.startsWith('__reactFiber$'));
+  for (const k of keys) {
+    if (k.startsWith('__reactProps$')) {
+      const p = el[k];
+      if (p && p.conversation && (p.conversation.id || p.conversation.conversationId)) {
+        convId = p.conversation.id || p.conversation.conversationId;
+        break;
+      }
+      continue;
+    }
+    let f = el[k], d = 0;
+    while (f && d++ < 30) {
+      const p = f.memoizedProps;
+      if (p && p.conversation && (p.conversation.id || p.conversation.conversationId)) {
+        convId = p.conversation.id || p.conversation.conversationId;
+        break;
+      }
+      f = f.return;
+    }
+    if (convId) break;
+  }
+  return { index: idx, title, convId };
+}"""
 
 JS_MSG_STATE = """(() => {
   const items = document.querySelectorAll('[data-e2e="msg-item-content"]');
@@ -936,6 +977,7 @@ class DouyinIM:
         self._callbacks = []
         self._login_lost = []
         self._select_failed = []
+        self._physical_select_degraded = False
         self._detached = False
         self.last_scan = None
         self._scan_cache = {}               # conv_id -> hit（跨调用复用）
@@ -1451,7 +1493,13 @@ class DouyinIM:
     def _select_and_verify(self, item, attempts=3):
         """选中并校验 conv_id。虚拟化下 nth 会漂，所以每轮都重新定位。"""
         want = item.get("conv_id")
-        for i in range(attempts):
+        cur = self._current_conv()
+        if want and cur and cur.get("convId") == want:
+            return True
+
+        physical_dispatches = 0
+        physical_attempts = 0 if self._physical_select_degraded else attempts
+        for i in range(physical_attempts):
             idx = self._dom_index_of(want)
             if idx is None:
                 logger.debug(f"[SEL] 第 {i+1} 次：目标不在当前窗口，先滚回来")
@@ -1461,10 +1509,14 @@ class DouyinIM:
                 if idx is None:
                     continue
             try:
-                self._mouse_select(idx)
+                dispatched = self._mouse_select(idx, want)
             except Exception as e:
                 logger.warning(f"[SEL] 第 {i+1} 次点击异常：{e}")
                 continue
+            if not dispatched:
+                logger.debug(f"[SEL] 第 {i+1} 次：点击前目标已重排，重新定位")
+                continue
+            physical_dispatches += 1
             self.page.wait_for_timeout(600)
 
             cur = self._current_conv()
@@ -1475,6 +1527,31 @@ class DouyinIM:
                 continue
             logger.debug(f"[SEL] ✅ 已选中 {cur.get('title')}  conv_id={cur.get('convId')}")
             return True
+
+        # 实测存在“整个浏览器会话的低层 mouse 通道失灵”的情况：连续 move/down/up
+        # 都能返回，但页面不会产生可用的会话切换。确认同一目标已有多个物理派发仍未
+        # 成功后，本会话熔断后续物理尝试，避免每个好友都白等三轮；新 DouyinIM 会话
+        # 会重新从 physical/humanized 路径开始。
+        if physical_dispatches >= 2 and not self._physical_select_degraded:
+            self._physical_select_degraded = True
+            logger.warning("[SEL] ⚠️ 当前会话物理鼠标连续失效，后续好友直接使用安全兜底")
+
+        # 物理鼠标通道在部分 CloakBrowser 会话里会整体失灵：move/down/up 均不产生
+        # DOM pointer/mouse 事件。切换好友本身可安全重试，因此这里允许一个确定性的
+        # mousedown 兜底；发送按钮绝不能照搬这种“物理后再兜底”的模式。
+        if want and self._synthetic_select(want, item.get("data_index", 0)):
+            self.page.wait_for_timeout(400)
+            cur = self._current_conv()
+            if cur and cur.get("convId") == want:
+                logger.warning(
+                    f"[SEL] ⚠️ 物理鼠标未稳定选中，DOM mousedown 兜底成功："
+                    f"{cur.get('title')}  conv_id={want}"
+                )
+                return True
+            logger.warning(
+                f"[SEL] DOM mousedown 兜底后 conv_id 仍不符："
+                f"want={want} current={(cur or {}).get('convId')}"
+            )
         return False
 
     def _dom_index_of(self, conv_id):
@@ -1492,9 +1569,41 @@ class DouyinIM:
                 return r.get("index")
         return None
 
-    def _mouse_select(self, index):
+    def _wait_selection_window_stable(self, timeout_ms=900, interval_ms=120):
+        """等待当前虚拟窗口的可见顺序短暂稳定，降低重排期间按错坐标的概率。"""
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        previous = None
+        same_pairs = 0
+        while time.monotonic() < deadline:
+            try:
+                current = self.page.evaluate(JS_WINDOW_FINGERPRINT)
+            except Exception:
+                return False
+            if current == previous:
+                same_pairs += 1
+                if same_pairs >= 2:
+                    return True
+            else:
+                same_pairs = 0
+                previous = current
+            self.page.wait_for_timeout(interval_ms)
+        logger.debug("[SEL] 会话窗口在点击前未完全稳定，继续使用坐标下身份复核")
+        return False
+
+    def _conv_at_point(self, x, y):
+        try:
+            return self.page.evaluate(JS_CONV_AT_POINT, [x, y])
+        except Exception:
+            return None
+
+    def _mouse_select(self, index, want=None):
         """真实鼠标选中。选中逻辑挂在 onMouseDown 上，click 也能触发，
-        但 cloakbrowser 已开 humanize，这里走原生鼠标保证时序可控。"""
+        但 cloakbrowser 已开 humanize，这里优先保留其人类化鼠标轨迹。
+
+        返回 False 表示鼠标移动期间列表已重排，调用方应重新按 conv_id 定位，
+        而不是继续点击旧坐标。
+        """
+        self._wait_selection_window_stable()
         handle = self.page.evaluate_handle(
             "(i) => document.querySelectorAll('[data-e2e=\"conversation-item\"]')[i]", index)
         el = handle.as_element()
@@ -1507,8 +1616,44 @@ class DouyinIM:
         x = box["x"] + box["width"] / 2
         y = box["y"] + min(box["height"] / 2, 26)
         self.page.mouse.move(x, y)
+
+        # humanized move 本身需要时间；在真正按下前重新读取坐标下的会话身份。
+        # 如果虚拟列表刚刚重排，宁可本轮不点，也不能把旧坐标点到别人身上。
+        if want:
+            under = self._conv_at_point(x, y)
+            if not under or under.get("convId") != want:
+                logger.debug(
+                    f"[SEL] 鼠标到位后目标发生变化：want={want} "
+                    f"under={(under or {}).get('convId')} title={(under or {}).get('title')}"
+                )
+                return False
+
         self.page.mouse.down()
+        self.page.wait_for_timeout(60)
         self.page.mouse.up()
+        return True
+
+    def _synthetic_select(self, conv_id, data_index=0):
+        """仅用于好友切换的确定性 mousedown 兜底，并始终由 conv_id 再校验。"""
+        idx = self._dom_index_of(conv_id)
+        if idx is None:
+            self._scroll_to((data_index or 0) * ROW_HEIGHT)
+            self.page.wait_for_timeout(400)
+            idx = self._dom_index_of(conv_id)
+        if idx is None:
+            return False
+
+        handle = self.page.evaluate_handle(
+            "(i) => document.querySelectorAll('[data-e2e=\"conversation-item\"]')[i]", idx
+        )
+        el = handle.as_element()
+        if el is None:
+            return False
+        try:
+            el.dispatch_event("mousedown", {"button": 0, "buttons": 1})
+        except Exception as e:
+            logger.warning(f"[SEL] DOM mousedown 兜底异常：{e}")
+            return False
         return True
 
     def _current_conv(self):
