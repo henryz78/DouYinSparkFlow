@@ -9,14 +9,12 @@
 ## Repository / Git state
 
 - Project root: `/root/mcp-workspace/DouYinSparkFlow`
-- Branch: `integrate-v3.2.1`
-- HEAD: `3c54009` — official v3.2.1 (`Bump version from 3.2.0 to 3.2.1`)
 - Fork remote: `https://github.com/henryz78/DouYinSparkFlow.git`
 - Official upstream: `https://github.com/2061360308/DouYinSparkFlow.git`
-- `fork/main` and `origin/main` are both verified at `3c54009`.
-- Our pre-v3.2.1 custom branch is `custom-pre-v3.2.1` at `9363a7e` and is pushed to `fork/custom-pre-v3.2.1`.
+- `main`: pure official v3.2.1 at `3c54009`; `fork/main` and `origin/main` are both verified at that commit. Do not add custom commits to `main` unless explicitly changing this policy.
+- `custom-pre-v3.2.1`: previous custom/stable line. Its code checkpoint is `9363a7e` (`WIP native sticker delivery`) on top of all earlier reliability/humanization work; the branch is pushed to `fork/custom-pre-v3.2.1`.
 - `9363a7e` includes all prior custom commits plus the uncommitted native-sticker WIP that was found in the working tree and preserved as `WIP native sticker delivery`.
-- `integrate-v3.2.1` now has checkpoint commit `0f8524c` (`WIP harden conversation selection`) on top of official `3c54009`; it contains only the click/selection reliability experiment and its tests.
+- `integrate-v3.2.1`: official-based experimental line. Selection code checkpoint `0f8524c` (`WIP harden conversation selection`) sits on top of official `3c54009`; handoff documentation is tracked in later commit(s). This branch is pushed to `fork/integrate-v3.2.1`.
 - `PROGRESS.md` is intentionally being tracked for cross-agent handoff on our custom/integration branches. Other `.mcp/` diagnostic probe scripts remain locally ignored.
 
 Relevant custom history now preserved on `custom-pre-v3.2.1`:
