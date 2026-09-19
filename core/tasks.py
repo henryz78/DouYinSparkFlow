@@ -1,4 +1,6 @@
 import traceback
+import math
+import random
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
 from utils import norm
@@ -21,6 +23,61 @@ CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
 CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
 CONVERSATION_LIST_SELECTOR = ".conversationConversationListwrapper"
 CHAT_EDITOR_SELECTOR = ".messageEditorimChatEditorContainer"
+
+
+def _build_natural_scroll_plan(rng=None):
+    """Build one human-looking downward scroll gesture.
+
+    Keep the overall distance close to the old +800px jump so friend-search
+    behavior stays similar, but split it into a short accelerate/decelerate
+    sequence with small timing variation.
+    """
+    rng = rng or random
+    step_count = rng.randint(6, 9)
+    total_distance = rng.randint(650, 850)
+
+    weights = []
+    for index in range(step_count):
+        phase = (index + 1) / (step_count + 1)
+        # Small at the ends, larger through the middle, with mild jitter.
+        weight = (0.55 + math.sin(math.pi * phase)) * rng.uniform(0.90, 1.10)
+        weights.append(weight)
+
+    weight_sum = sum(weights)
+    steps = [max(20, round(total_distance * weight / weight_sum)) for weight in weights]
+    steps[-1] += total_distance - sum(steps)
+
+    pauses = []
+    for index in range(step_count - 1):
+        edge = min(index, step_count - 2 - index)
+        if edge == 0:
+            pauses.append(rng.uniform(0.07, 0.14))
+        else:
+            pauses.append(rng.uniform(0.035, 0.10))
+    return steps, pauses
+
+
+def natural_scroll_element(element, rng=None, sleep_fn=time.sleep):
+    """Scroll a container in several small visible steps and return before/after."""
+    rng = rng or random
+    before = element.evaluate("element => element.scrollTop")
+    current = before
+    steps, pauses = _build_natural_scroll_plan(rng)
+
+    for index, delta in enumerate(steps):
+        previous = current
+        current = element.evaluate(
+            "(element, delta) => { element.scrollTop += delta; return element.scrollTop; }",
+            delta,
+        )
+        if current == previous:
+            break
+        if index < len(pauses):
+            sleep_fn(pauses[index])
+
+    # Let lazy-loaded rows settle before the caller scans the list again.
+    sleep_fn(rng.uniform(0.28, 0.55))
+    return before, current
 
 
 def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
@@ -165,19 +222,10 @@ def scroll_and_select_user(page, username, targets):
             ).element_handle()
 
             if scrollable_element:
-                # [修复] 记录滚动前的 scrollTop，用于检测是否真的滚动了
-                scroll_top_before = page.evaluate(
-                    "(element) => element.scrollTop", scrollable_element
-                )
-
-                page.evaluate(
-                    "(element) => element.scrollTop += 800", scrollable_element
-                )
-
-                # [修复] 检测滚动后的 scrollTop
-                time.sleep(0.3)
-                scroll_top_after = page.evaluate(
-                    "(element) => element.scrollTop", scrollable_element
+                # 保持原来一次大约 800px 的搜索推进距离，但分成 6-9 个
+                # 小步完成，带轻微加速/减速和随机停顿，视觉上更接近人工滚动。
+                scroll_top_before, scroll_top_after = natural_scroll_element(
+                    scrollable_element
                 )
 
                 if scroll_top_before == scroll_top_after:
@@ -191,7 +239,7 @@ def scroll_and_select_user(page, username, targets):
                         f"账号 {username} 滚动好友列表以加载更多好友 (scrollTop: {scroll_top_before} -> {scroll_top_after})"
                     )
 
-                time.sleep(1.5)
+                human_pause(0.75, 1.35)
             else:
                 logger.error(f"账号 {username} 未找到滚动容器，退出")
                 break
