@@ -16,6 +16,7 @@ class _Editor:
         return self.text
 
     def focus(self):
+        self.actions.append(("focus",))
         return None
 
     def type(self, text, force=False):
@@ -26,6 +27,8 @@ class _Editor:
         self.actions.append(("press", key, force))
         if key == "Shift+Enter":
             self.text += "\n"
+        elif key == "Backspace":
+            self.text = ""
 
 
 class _Locator:
@@ -37,8 +40,11 @@ class _Keyboard:
     def __init__(self, editor):
         self.editor = editor
         self.inserted = []
+        self.pressed = []
 
     def press(self, key):
+        self.pressed.append(key)
+        self.editor.actions.append(("keyboard_press", key))
         if key == "Backspace":
             self.editor.text = ""
 
@@ -61,6 +67,48 @@ class _Page:
 
 
 class ReliableDeliveryTests(unittest.TestCase):
+    def test_input_waits_briefly_after_focus_before_typing(self):
+        page = _Page()
+        with patch.object(delivery, "human_pause") as pause:
+            delivery._type_message(
+                page,
+                "account",
+                "Ken",
+                "A",
+                {"browserTimeout": 1000},
+            )
+        self.assertEqual(page.editor.actions[0], ("focus",))
+        self.assertEqual(pause.call_args_list[0].args, (0.12, 0.30))
+        self.assertIn(("insert_text", "A"), page.editor.actions)
+
+    def test_existing_draft_is_cleared_with_human_pacing(self):
+        page = _Page()
+        page.editor.text = "old draft"
+        with patch.object(delivery, "human_pause") as pause:
+            delivery._type_message(
+                page,
+                "account",
+                "Ken",
+                "新",
+                {"browserTimeout": 1000},
+            )
+
+        self.assertEqual(
+            page.keyboard.pressed[:3],
+            ["Control+A", "Control+A", "Backspace"],
+        )
+        self.assertEqual(
+            [call.args for call in pause.call_args_list[:5]],
+            [
+                (0.08, 0.18),
+                (0.04, 0.09),
+                (0.05, 0.11),
+                (0.12, 0.28),
+                (0.12, 0.30),
+            ],
+        )
+        self.assertEqual(page.editor.text, "新")
+
     def test_input_preserves_native_emoji_shortcodes_and_newlines(self):
         page = _Page()
         with patch.object(delivery, "human_pause"):

@@ -277,14 +277,21 @@ def _type_message(page, username: str, friend: str, message: str, config):
     editor = page.locator(CHAT_EDITABLE_SELECTOR).first
     if norm(editor.inner_text()):
         editor.focus()
+        human_pause(0.08, 0.18)
+        # Slate 中第一次 Ctrl+A 可能只选中当前块；第二次才稳定全选草稿。
         page.keyboard.press("Control+A")
+        human_pause(0.04, 0.09)
+        page.keyboard.press("Control+A")
+        human_pause(0.05, 0.11)
         page.keyboard.press("Backspace")
-        time.sleep(0.2)
+        human_pause(0.12, 0.28)
     if norm(editor.inner_text()):
         raise RuntimeError(
             f"账号 {username} 好友 {friend} 输入框存在无法清理的旧草稿，已阻止发送"
         )
     editor.focus()
+    # 聚焦后留一个很短的自然反应时间，再开始输入第一字符。
+    human_pause(0.12, 0.30)
     for kind, value in _message_input_tokens(message):
         if kind == "shortcode":
             # 抖音会在逐字输入过程中提前解析 [display_name]；整块插入才稳定。
