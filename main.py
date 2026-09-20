@@ -31,13 +31,19 @@ def main():
         serve()
         return
 
+    if MODE in {"selection", "select"}:
+        from core.tasks import runTasks
+
+        runTasks(selection_only=True)
+        return
+
     if MODE in {"task", "run", "cli", ""}:
         from core.tasks import runTasks
 
         runTasks()
         return
 
-    print(f"未知启动模式: {MODE}（可选：task / fc）", file=sys.stderr)
+    print(f"未知启动模式: {MODE}（可选：task / selection / fc）", file=sys.stderr)
     sys.exit(2)
 
 

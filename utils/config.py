@@ -25,6 +25,14 @@ def get_config():
     if config:
         return config
 
+    friend_wait_seconds = float(os.getenv("FRIEND_LIST_WAIT_TIME", "3"))
+    if friend_wait_seconds > 120:
+        logger.warning(
+            "FRIEND_LIST_WAIT_TIME=%s 当前单位为秒；如果这是旧版毫秒配置，"
+            "请改成例如 2，而不是 2000",
+            friend_wait_seconds,
+        )
+
     config = {
         "proxyAddress": os.getenv("PROXY_ADDRESS", ""),
         "messageTemplate": os.getenv(
@@ -47,7 +55,7 @@ def get_config():
             os.getenv("IM_READY_TIMEOUT", "120")
         ),  # 门禁等待上限，秒
         "friendListSettleMs": int(
-            float(os.getenv("FRIEND_LIST_WAIT_TIME", "3")) * 1000
+            friend_wait_seconds * 1000
         ),  # 资料静默窗，毫秒
         "imMaxSteps": int(
             os.getenv("IM_MAX_STEPS", "200")

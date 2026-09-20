@@ -72,8 +72,10 @@ def _verify_persisted(context, account_key, record, config, logger):
         verify_page.close()
 
 
-def do_user_task(browser, username, cookies, targets, account_key=None):
-    """一个账号的完整流程：门禁 → 滚动找人 → 发送 → 回执确认。
+def do_user_task(
+    browser, username, cookies, targets, account_key=None, selection_only=False
+):
+    """一个账号的流程；selection_only 只找人并校验，不输入、不发送。
 
     实现委托给 `core.douyin_im.DouyinIM`：
       任务一（门禁）    DouyinIM 构造时自动完成，结论在 wait_ready() 里
@@ -125,15 +127,16 @@ def do_user_task(browser, username, cookies, targets, account_key=None):
         )
 
         account_key = account_key or username
-        sent_ok = sent_fail = 0
-        pending_targets = []
-        for target in targets:
-            record = delivery_state.get(account_key, norm(target))
-            if record and record.get("status") == "confirmed":
-                sent_ok += 1
-                logger.info(f"账号 {username} 好友 {target} 今日已确认发送，跳过")
-            else:
-                pending_targets.append(target)
+        sent_ok = sent_fail = selected_ok = 0
+        pending_targets = list(targets) if selection_only else []
+        if not selection_only:
+            for target in targets:
+                record = delivery_state.get(account_key, norm(target))
+                if record and record.get("status") == "confirmed":
+                    sent_ok += 1
+                    logger.info(f"账号 {username} 好友 {target} 今日已确认发送，跳过")
+                else:
+                    pending_targets.append(target)
 
         if not pending_targets:
             logger.info(f"账号 {username} 今日所有目标好友都已确认发送，无需重复执行")
@@ -141,7 +144,16 @@ def do_user_task(browser, username, cookies, targets, account_key=None):
 
         # 生成器：yield 出来的那一刻，对应好友的会话已经被选中
         for friend in im.iter_find_and_select(pending_targets):
-            logger.debug(f"账号 {username} 已选中好友 {friend['display']}，准备发送")
+            logger.info(
+                f"账号 {username} 已选中好友 {friend['display']}，"
+                f"conv_id={friend.get('conv_id')}"
+                + ("（selection-only，不发送）" if selection_only else "，准备发送")
+            )
+            if selection_only:
+                selected_ok += 1
+                page.wait_for_timeout(800)
+                continue
+
             target_key = norm(friend.get("display") or friend.get("conv_id"))
             record = delivery_state.get(account_key, target_key)
 
@@ -204,6 +216,7 @@ def do_user_task(browser, username, cookies, targets, account_key=None):
         logger.info(
             f"账号 {username} 扫描结束：停止原因={scan.get('stopped')} "
             f"步数={scan.get('steps')} 访问会话={scan.get('visited')} "
+            f"选择成功={selected_ok if selection_only else '-'} "
             f"发送成功={sent_ok} 发送失败={sent_fail}"
         )
         if scan.get("missing"):
@@ -224,11 +237,14 @@ def do_user_task(browser, username, cookies, targets, account_key=None):
             reasons.append(f"未找到目标={scan['missing']}")
         if scan.get("select_failed"):
             reasons.append(f"选中失败={scan['select_failed']}")
-        if sent_fail:
+        if sent_fail and not selection_only:
             reasons.append(f"发送失败={sent_fail}")
         expected = len(set(targets))
-        if sent_ok != expected:
-            reasons.append(f"发送成功={sent_ok}/{expected}")
+        completed = selected_ok if selection_only else sent_ok
+        if completed != expected:
+            reasons.append(
+                f"{'选择成功' if selection_only else '发送成功'}={completed}/{expected}"
+            )
         if reasons:
             raise RuntimeError(f"账号 {username} 任务未完成：" + "；".join(reasons))
 
@@ -247,10 +263,12 @@ def do_user_task(browser, username, cookies, targets, account_key=None):
         context.close()  # 任务完成后关闭上下文
 
 
-def runTasks():
+def runTasks(selection_only=False):
     # 检查是否启用多任务和任务数量
     # 创建信号量以限制并发任务数量
-    logger.info("开始执行任务")
+    logger.info(
+        "开始执行任务" + ("（selection-only：不输入、不发送）" if selection_only else "")
+    )
     logger.debug(f"当前配置如下：")
     logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
     logger.debug(f"一言类型: {config['hitokotoTypes']}")
@@ -279,6 +297,7 @@ def runTasks():
                 # Keep the username key compatible with the existing custom
                 # send_state.json format; unique_id migration can come later.
                 account_key=username,
+                selection_only=selection_only,
             )
             logger.info(f"账号 {username} 任务完成")
         finally:
