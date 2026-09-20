@@ -30,8 +30,23 @@ class DeliveryStateTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["version"], 1)
 
-    def test_corrupt_state_fails_closed(self):
+    def test_corrupt_state_recovers_from_backup(self):
+        delivery_state.put("account-1", "Rick", {"status": "confirmed"}, day="2026-09-20")
         self.path.write_text("{not-json", encoding="utf-8")
+        self.assertEqual(
+            delivery_state.get("account-1", "Rick", day="2026-09-20"),
+            {"status": "confirmed"},
+        )
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["version"], 1)
+
+    def test_corrupt_state_fails_closed_without_backup(self):
+        self.path.write_text("{not-json", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "无法读取"):
+            delivery_state.load()
+
+    def test_corrupt_primary_and_backup_fail_closed(self):
+        self.path.write_text("{not-json", encoding="utf-8")
+        delivery_state.backup_path().write_text("also-bad", encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "无法读取"):
             delivery_state.load()
 
