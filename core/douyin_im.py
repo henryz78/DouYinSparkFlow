@@ -1493,8 +1493,11 @@ class DouyinIM:
     def _select_and_verify(self, item, attempts=3):
         """选中并校验 conv_id。虚拟化下 nth 会漂，所以每轮都重新定位。"""
         want = item.get("conv_id")
+        if not want:
+            logger.warning("[SEL] 目标缺少 conv_id，拒绝选择")
+            return False
         cur = self._current_conv()
-        if want and cur and cur.get("convId") == want:
+        if cur and cur.get("convId") == want:
             return True
 
         physical_dispatches = 0
@@ -1520,10 +1523,11 @@ class DouyinIM:
             self.page.wait_for_timeout(600)
 
             cur = self._current_conv()
-            if not cur:
-                continue
-            if want and cur.get("convId") and cur["convId"] != want:
-                logger.warning(f"[SEL] 第 {i+1} 次选中了 {cur.get('title')}（conv_id 不符）")
+            if not cur or cur.get("convId") != want:
+                logger.warning(
+                    f"[SEL] 第 {i+1} 次选择校验失败："
+                    f"want={want} current={(cur or {}).get('convId')}"
+                )
                 continue
             logger.debug(f"[SEL] ✅ 已选中 {cur.get('title')}  conv_id={cur.get('convId')}")
             return True
@@ -1684,6 +1688,14 @@ class DouyinIM:
         if not text:
             raise ValueError("text is empty")
 
+        want = hit.get("conv_id")
+        cur = self._current_conv()
+        if not want or not cur or cur.get("convId") != want:
+            raise RuntimeError(
+                f"发送前会话校验失败：目标={want or '-'} "
+                f"当前={(cur or {}).get('convId') or '-'}"
+            )
+
         # ① 草稿残留自查：上一条没清干净会导致两条消息串发。
         # 61bddaa 的稳定路径用真实编辑器焦点和 Ctrl+A/Backspace，
         # 不依赖 Slate 的 execCommand 清除。
@@ -1728,6 +1740,12 @@ class DouyinIM:
         msg_before = self._msg_state()
 
         # ③ 发送：按钮优先（有内容时变红可点），退化到回车
+        cur = self._current_conv()
+        if not cur or cur.get("convId") != want:
+            raise RuntimeError(
+                f"发送按钮前会话校验失败：目标={want} "
+                f"当前={(cur or {}).get('convId') or '-'}"
+            )
         how = self._click_send()
         logger.debug(f"[SEND] 发送方式={how}  conv_id={hit.get('conv_id')}")
 

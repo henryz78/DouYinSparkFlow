@@ -317,6 +317,18 @@ class SelectionFallbackTests(unittest.TestCase):
         self.assertEqual(s.physical_calls, 2)
         self.assertEqual(s.synthetic_calls, 1)
 
+    def test_current_without_conv_id_is_not_selection_success(self):
+        s = _SelectionStub(physical_success=False, fallback_success=False)
+        s._current_conv = lambda: {"convId": None, "title": "Old"}
+        self.assertFalse(s._select_and_verify(dict(self.ITEM), attempts=1))
+        self.assertEqual(s.physical_calls, 1)
+        self.assertEqual(s.synthetic_calls, 1)
+
+    def test_target_without_conv_id_is_rejected(self):
+        s = _SelectionStub(physical_success=True)
+        self.assertFalse(s._select_and_verify({"conv_id": None}, attempts=1))
+        self.assertEqual(s.physical_calls, 0)
+
     def test_repeated_physical_failure_circuit_breaks_for_session(self):
         s = _SelectionStub(physical_success=False, fallback_success=True)
         self.assertTrue(s._select_and_verify(dict(self.ITEM), attempts=2))
@@ -396,6 +408,42 @@ class MouseSelectRaceTests(unittest.TestCase):
         self.assertTrue(s._mouse_select(0, "wanted-conversation"))
         self.assertEqual(s.page.mouse.downs, 1)
         self.assertEqual(s.page.mouse.ups, 1)
+
+
+class SendConversationGuardTests(unittest.TestCase):
+    def test_send_stops_if_current_conversation_changed(self):
+        s = _Stub()
+        s._current_conv = lambda: {"convId": "other", "title": "Other"}
+        with self.assertRaisesRegex(RuntimeError, "发送前会话校验失败"):
+            s.type_and_send({"conv_id": "wanted"}, "hello")
+
+    def test_send_stops_if_conversation_changes_during_input(self):
+        class Editor:
+            def focus(self):
+                pass
+
+        class Keyboard:
+            def insert_text(self, text):
+                pass
+
+        class Page:
+            keyboard = Keyboard()
+
+            def evaluate(self, script):
+                return None
+
+        s = _Stub()
+        s.page = Page()
+        s.mon = JoinTests._MonStub("unused")
+        s.mon.sends = []
+        s._editor = lambda: Editor()
+        s._msg_state = lambda: {}
+        states = iter(({"convId": "wanted"}, {"convId": "other"}))
+        s._current_conv = lambda: next(states)
+        s._click_send = lambda: self.fail("会话切换后仍点击了发送按钮")
+
+        with self.assertRaisesRegex(RuntimeError, "发送按钮前会话校验失败"):
+            s.type_and_send({"conv_id": "wanted"}, "hello")
 
 
 class _VListStub(_Stub):
