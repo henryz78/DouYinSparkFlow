@@ -1,8 +1,12 @@
+import re
+import time
+
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
 from core.msg_builder import build_message
 from core.browser import get_browser
 from core.douyin_im import DouyinIM, STATUS_READY, norm
+from core import delivery_state
 
 
 config = get_config()
@@ -10,7 +14,65 @@ userData = get_userData()
 logger = setup_logger(level=config.get("logLevel", "Info"))
 
 
-def do_user_task(browser, username, cookies, targets):
+def _verification_text(message):
+    return re.sub(r"\[[^\[\]\n]+\]", "", (message or "")).replace("\\n", "\n")
+
+
+def _canonical_text(text):
+    return re.sub(r"\s+", "", norm(text or ""))
+
+
+def _matching_outgoing_count(messages, expected):
+    expected = _canonical_text(expected)
+    return sum(1 for message in messages if _canonical_text(message) == expected)
+
+
+def _new_im(page, config):
+    return DouyinIM(
+        page,
+        timeout=config["imScanTimeout"],
+        ready_timeout=config["imReadyTimeout"],
+        settle_ms=config["friendListSettleMs"],
+        max_steps=config["imMaxSteps"],
+    )
+
+
+def _verify_persisted(context, account_key, record, config, logger):
+    """在新页面确认这次发送已存在；失败时绝不自动再次发送。"""
+    verify_page = context.new_page()
+    verify_im = None
+    try:
+        verify_im = _new_im(verify_page, config)
+        if verify_im.wait_ready().get("status") != STATUS_READY:
+            return False
+        target = record.get("display") or record.get("target")
+        if not target:
+            return False
+        for hit in verify_im.iter_find_and_select([target]):
+            if hit.get("conv_id") != record.get("conv_id"):
+                continue
+            verify_page.wait_for_timeout(800)
+            current = verify_im._current_conv() or {}
+            if current.get("convId") != record.get("conv_id"):
+                continue
+            count = _matching_outgoing_count(
+                verify_im._outgoing_messages(), record.get("verification_text", "")
+            )
+            if count > int(record.get("baseline_count", 0) or 0):
+                return True
+        return False
+    except Exception as exc:
+        logger.warning(
+            f"账号 {account_key} 好友 {record.get('display', '-')} 持久化确认失败：{exc}"
+        )
+        return False
+    finally:
+        if verify_im is not None:
+            verify_im.detach()
+        verify_page.close()
+
+
+def do_user_task(browser, username, cookies, targets, account_key=None):
     """一个账号的完整流程：门禁 → 滚动找人 → 发送 → 回执确认。
 
     实现委托给 `core.douyin_im.DouyinIM`：
@@ -62,14 +124,68 @@ def do_user_task(browser, username, cookies, targets):
             f"nickname={res.get('nickname')} 会话列表就绪"
         )
 
+        account_key = account_key or username
         sent_ok = sent_fail = 0
+        pending_targets = []
+        for target in targets:
+            record = delivery_state.get(account_key, norm(target))
+            if record and record.get("status") == "confirmed":
+                sent_ok += 1
+                logger.info(f"账号 {username} 好友 {target} 今日已确认发送，跳过")
+            else:
+                pending_targets.append(target)
+
+        if not pending_targets:
+            logger.info(f"账号 {username} 今日所有目标好友都已确认发送，无需重复执行")
+            return
 
         # 生成器：yield 出来的那一刻，对应好友的会话已经被选中
-        for friend in im.iter_find_and_select(targets):
+        for friend in im.iter_find_and_select(pending_targets):
             logger.debug(f"账号 {username} 已选中好友 {friend['display']}，准备发送")
+            target_key = norm(friend.get("display") or friend.get("conv_id"))
+            record = delivery_state.get(account_key, target_key)
+
+            if record and record.get("status") == "attempted":
+                if _verify_persisted(context, account_key, record, config, logger):
+                    record["status"] = "confirmed"
+                    record["confirmed_at"] = time.time()
+                    delivery_state.put(account_key, target_key, record)
+                    sent_ok += 1
+                    logger.info(f"账号 {username} 好友 {friend['display']} 已确认上次发送，跳过重发")
+                else:
+                    sent_fail += 1
+                    logger.error(
+                        f"账号 {username} 好友 {friend['display']} 今日已有 attempted 记录但无法确认；"
+                        "为避免重复发送，本日不再派发"
+                    )
+                page.wait_for_timeout(800)
+                continue
+
             message = build_message()
+            verification_text = _verification_text(message)
+            baseline_count = _matching_outgoing_count(
+                im._outgoing_messages(), verification_text
+            )
+            delivery_state.put(
+                account_key,
+                target_key,
+                {
+                    "status": "attempted",
+                    "target": target_key,
+                    "display": friend.get("display"),
+                    "conv_id": friend.get("conv_id"),
+                    "verification_text": verification_text,
+                    "baseline_count": baseline_count,
+                    "attempted_at": time.time(),
+                },
+            )
             r = im.type_and_send(friend, message)
-            if r["ok"]:
+            record = delivery_state.get(account_key, target_key) or {}
+            if _verify_persisted(context, account_key, record, config, logger):
+                record["status"] = "confirmed"
+                record["confirmed_at"] = time.time()
+                record["receipt_ok"] = bool(r["ok"])
+                delivery_state.put(account_key, target_key, record)
                 sent_ok += 1
                 logger.info(
                     f"账号 {username} → {friend['display']} 发送成功"
@@ -78,8 +194,8 @@ def do_user_task(browser, username, cookies, targets):
             else:
                 sent_fail += 1
                 logger.warning(
-                    f"账号 {username} → {friend['display']} 未拿到回执；"
-                    "结果不确定，本轮不自动重发"
+                    f"账号 {username} → {friend['display']} 未通过持久化确认；"
+                    "状态保留 attempted，本轮及后续不自动重发"
                 )
             # 发送完让列表状态落定，再继续滚动（发送会把该会话移到顶部）
             page.wait_for_timeout(800)
@@ -155,7 +271,15 @@ def runTasks():
         # 创建任务
         try:
             browser = get_browser(fingerprint)
-            do_user_task(browser, username, cookies, targets)
+            do_user_task(
+                browser,
+                username,
+                cookies,
+                targets,
+                # Keep the username key compatible with the existing custom
+                # send_state.json format; unique_id migration can come later.
+                account_key=username,
+            )
             logger.info(f"账号 {username} 任务完成")
         finally:
             # 关闭浏览器实例

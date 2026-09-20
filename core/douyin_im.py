@@ -307,6 +307,13 @@ JS_MSG_STATE = """(() => {
   };
 })()"""
 
+JS_OUTGOING_MESSAGES = """(() => {
+  const items = document.querySelectorAll('[data-e2e="msg-item-content"]');
+  return [...items].filter(item => item.closest(
+    '.MessageBoxContentisFromMe, .messageMessageBoxcontentBox.messageMessageBoxisFromMe'
+  )).map(item => item.textContent.trim()).filter(Boolean);
+})()"""
+
 # ===========================================================================
 # 三、protobuf 最小解码（Python 原生大整数，不存在 JS 的 2^53 精度坑）
 # ===========================================================================
@@ -1792,6 +1799,12 @@ class DouyinIM:
             return self.page.evaluate(JS_MSG_STATE) or {}
         except Exception:
             return {}
+
+    def _outgoing_messages(self):
+        try:
+            return self.page.evaluate(JS_OUTGOING_MESSAGES) or []
+        except Exception:
+            return []
 
     def _click_send(self):
         btn = self.page.locator(SEL_SEND_BTN_READY).first
