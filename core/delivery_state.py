@@ -86,6 +86,11 @@ def save(state: dict) -> None:
         if previous is not None:
             _write(backup_path(), previous)
     _write(path, state)
+    try:
+        _write(backup_path(), state)
+    except OSError:
+        # The primary write is already atomic and valid; keep the older backup.
+        pass
 
 
 def get(account: str, target: str, day: str | None = None) -> dict | None:
