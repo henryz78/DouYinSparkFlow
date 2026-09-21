@@ -33,8 +33,14 @@ def get_config():
             friend_wait_seconds,
         )
 
+    delivery_mode = os.getenv("DELIVERY_MODE", "text").strip().lower()
+    if delivery_mode not in {"text", "native_sticker"}:
+        raise ValueError("DELIVERY_MODE 仅支持 text 或 native_sticker")
+
     config = {
         "proxyAddress": os.getenv("PROXY_ADDRESS", ""),
+        "deliveryMode": delivery_mode,
+        "nativeStickerName": os.getenv("NATIVE_STICKER_NAME", "续火花").strip() or "续火花",
         "messageTemplate": os.getenv(
             "MESSAGE_TEMPLATE",
             "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n[API]",

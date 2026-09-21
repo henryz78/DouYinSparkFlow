@@ -30,7 +30,7 @@ import traceback
 import json
 import re
 import unicodedata
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from utils.config import get_config
 from utils.logger import setup_logger
@@ -81,6 +81,12 @@ SEL_MSG_ITEM = '[data-e2e="msg-item-content"]'
 SEL_MSG_FROM_ME = ".MessageBoxContentisFromMe"
 SEL_SEND_BTN = ".messageMsgInputpublishBtn"
 SEL_SEND_BTN_READY = ".messageMsgInputpublishBtn.messageMsgInputpublishRedBtn"  # 有内容可发
+SEL_STICKER_BUTTON = "svg.messageMsgInputiconAction"
+SEL_STICKER_PANEL = ".componentsemojiemojiPanel"
+SEL_STICKER_ITEM = ".emojiEmojiItememojiItem"
+SEL_STICKER_CLICK_TARGET = ".emojiEmojiItemimgBox"
+SEL_STICKER_DESC = ".emojiEmojiItememojiItemDesc"
+SEL_STICKER_TARGET_MARKER = '[data-douyin-sparkflow-sticker-target="active"]'
 
 # 输入框：优先 contenteditable 本体（humanize 的"可编辑"检查能过），容器兜底
 EDITOR_CANDIDATES = (
@@ -313,6 +319,53 @@ JS_OUTGOING_MESSAGES = """(() => {
     '.MessageBoxContentisFromMe, .messageMessageBoxcontentBox.messageMessageBoxisFromMe'
   )).map(item => item.textContent.trim()).filter(Boolean);
 })()"""
+
+JS_OUTGOING_STICKER_SNAPSHOT = """(resourceKey) => {
+  const boxes = Array.from(document.querySelectorAll(
+    '.messageMessageBoxcontentBox.messageMessageBoxisFromMe'
+  ));
+
+  function virtualIdFor(box) {
+    const row = box.closest('[data-index]');
+    if (!row || !row.parentElement) return '';
+    const index = Number(row.getAttribute('data-index'));
+    if (!Number.isInteger(index) || index < 0) return '';
+    const host = row.parentElement;
+    const roots = [];
+    for (const key of Object.keys(host)) {
+      try {
+        if (key.startsWith('__reactProps$')) {
+          roots.push(host[key] && host[key].children);
+        } else if (key.startsWith('__reactFiber$')) {
+          roots.push(host[key] && host[key].pendingProps && host[key].pendingProps.children);
+        }
+      } catch (_) {}
+    }
+    for (const root of roots) {
+      const children = Array.isArray(root) ? root : [root];
+      const child = children[index];
+      const id = child && child.props && child.props.virtualItem && child.props.virtualItem.id;
+      if (id) return String(id);
+    }
+    return '';
+  }
+
+  const matchingIds = [];
+  let matchingCount = 0;
+  for (const box of boxes) {
+    const id = virtualIdFor(box);
+    const matches = Array.from(box.querySelectorAll('img')).some(
+      image => String(image.getAttribute('src') || '').includes(resourceKey)
+    );
+    if (!matches) continue;
+    matchingCount += 1;
+    if (id) matchingIds.push(id);
+  }
+  return {
+    matching_ids: matchingIds,
+    matching_count: matchingCount,
+  };
+}"""
 
 # ===========================================================================
 # 三、protobuf 最小解码（Python 原生大整数，不存在 JS 的 2^53 精度坑）
@@ -1805,6 +1858,138 @@ class DouyinIM:
             return self.page.evaluate(JS_OUTGOING_MESSAGES) or []
         except Exception:
             return []
+
+    def prepare_native_sticker(self, sticker_name="续火花"):
+        """Open the sticker panel and resolve one exact sticker without sending."""
+        name = norm(sticker_name)
+        if not name:
+            raise RuntimeError("原生贴纸名称为空")
+
+        panel = self.page.locator(SEL_STICKER_PANEL).first
+        try:
+            visible = bool(panel.count() and panel.is_visible())
+        except Exception:
+            visible = False
+        if not visible:
+            button = self.page.locator(SEL_STICKER_BUTTON).first
+            if button.count() == 0 or not button.is_visible():
+                raise RuntimeError("未找到可见的抖音表情按钮")
+            button.dispatch_event("click")
+            self.page.wait_for_selector(
+                SEL_STICKER_PANEL,
+                state="visible",
+                timeout=min(self.ready_timeout * 1000, 10_000),
+            )
+            panel = self.page.locator(SEL_STICKER_PANEL).first
+
+        items = panel.locator(SEL_STICKER_ITEM)
+        for index in range(items.count()):
+            item = items.nth(index)
+            desc = item.locator(SEL_STICKER_DESC).first
+            if desc.count() == 0 or norm(desc.inner_text()) != name:
+                continue
+            image = item.locator("img").first
+            src = image.get_attribute("src") if image.count() else ""
+            resource_key = urlsplit(src or "").path.rsplit("/", 1)[-1]
+            if not resource_key:
+                raise RuntimeError(f"原生贴纸 {name} 缺少资源标识")
+            # The panel can leave a loading layer over the image. Wait until
+            # the image is loaded and that layer no longer receives pointer
+            # events, otherwise a trusted click lands on the overlay.
+            click_target = item.locator("img").first
+            if click_target.count() == 0:
+                raise RuntimeError(f"原生贴纸 {name} 缺少贴纸图片")
+            deadline = time.monotonic() + min(self.ready_timeout, 10)
+            while True:
+                ready = click_target.evaluate(
+                    """el => {
+                      const loading = el.closest('.emojiEmojiItemimgBox')?.querySelector('.emojiEmojiItemloading');
+                      const style = loading ? getComputedStyle(loading) : null;
+                      return {
+                        loaded: !!el.complete && Number(el.naturalWidth || 0) > 0,
+                        blocked: !!loading && style.pointerEvents !== 'none'
+                          && style.visibility !== 'hidden' && style.display !== 'none'
+                          && Number(style.opacity || 1) > 0,
+                      };
+                    }"""
+                )
+                if ready is True or (
+                    isinstance(ready, dict)
+                    and ready.get("loaded")
+                    and not ready.get("blocked")
+                ):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"原生贴纸 {name} 图片仍在加载")
+                self.page.wait_for_timeout(200)
+
+            # Mark the exact image box and re-resolve it with a simple CSS
+            # selector. The box owns Douyin's native React onClick; do not
+            # follow it with a separate send-button click.
+            try:
+                self.page.evaluate(
+                    "(selector) => document.querySelectorAll(selector).forEach((el) => el.removeAttribute('data-douyin-sparkflow-sticker-target'))",
+                    SEL_STICKER_TARGET_MARKER,
+                )
+                click_target = item.locator(SEL_STICKER_CLICK_TARGET).first
+                if click_target.count() == 0:
+                    raise RuntimeError("缺少贴纸图片区域")
+                click_target.evaluate(
+                    "(el) => { el.setAttribute('data-douyin-sparkflow-sticker-target', 'active'); return true; }"
+                )
+                click_target = self.page.locator(SEL_STICKER_TARGET_MARKER).first
+                if click_target.count() == 0:
+                    raise RuntimeError("无法重新定位精确贴纸图片")
+            except Exception as exc:
+                raise RuntimeError(f"原生贴纸 {name} 无法定位精确贴纸图片：{exc}") from exc
+            return {
+                "item": click_target,
+                "name": name,
+                "resource_key": resource_key,
+                "snapshot": self._outgoing_sticker_snapshot(resource_key),
+            }
+        raise RuntimeError(f"在抖音表情面板中找不到原生贴纸: {name}")
+
+    def _outgoing_sticker_snapshot(self, resource_key):
+        try:
+            snapshot = self.page.evaluate(JS_OUTGOING_STICKER_SNAPSHOT, resource_key)
+        except Exception:
+            snapshot = None
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        return {
+            "matching_ids": [str(value) for value in snapshot.get("matching_ids", []) if value],
+            "matching_count": int(snapshot.get("matching_count", 0) or 0),
+        }
+
+    def send_native_sticker(self, hit, prepared):
+        """Dispatch one exact sticker click after rechecking the conversation."""
+        want = (hit or {}).get("conv_id")
+        current = self._current_conv()
+        if not want or not current or current.get("convId") != want:
+            raise RuntimeError(
+                f"贴纸发送前会话校验失败：目标={want or '-'} "
+                f"当前={(current or {}).get('convId') or '-'}"
+            )
+        item = (prepared or {}).get("item")
+        if item is None:
+            raise RuntimeError("原生贴纸项已失效，已阻止发送")
+        # The sticker's own React click handler is the direct send action;
+        # dispatch exactly one click on that element, never a separate send-button click.
+        item.dispatch_event("click")
+        try:
+            self.page.evaluate(
+                "(selector) => document.querySelectorAll(selector).forEach((el) => el.removeAttribute('data-douyin-sparkflow-sticker-target'))",
+                SEL_STICKER_TARGET_MARKER,
+            )
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "via": "sticker",
+            "conv_id": want,
+            "display": (hit or {}).get("display"),
+        }
 
     def _click_send(self):
         btn = self.page.locator(SEL_SEND_BTN_READY).first

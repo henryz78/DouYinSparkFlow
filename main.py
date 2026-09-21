@@ -37,13 +37,22 @@ def main():
         runTasks(selection_only=True)
         return
 
+    if MODE in {"sticker_probe", "sticker-probe"}:
+        from core.tasks import runTasks
+
+        runTasks(sticker_probe=True)
+        return
+
     if MODE in {"task", "run", "cli", ""}:
         from core.tasks import runTasks
 
         runTasks()
         return
 
-    print(f"未知启动模式: {MODE}（可选：task / selection / fc）", file=sys.stderr)
+    print(
+        f"未知启动模式: {MODE}（可选：task / selection / sticker_probe / fc）",
+        file=sys.stderr,
+    )
     sys.exit(2)
 
 

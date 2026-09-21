@@ -72,10 +72,67 @@ def _verify_persisted(context, account_key, record, config, logger):
         verify_page.close()
 
 
+def _verify_sticker_persisted(context, account_key, record, config, logger):
+    """在新页面确认本次原生贴纸产生了新的己方同资源消息。"""
+    resource_key = str(record.get("resource_key") or "")
+    if not resource_key:
+        return False
+    baseline_ids = {
+        str(value) for value in (record.get("baseline_message_ids") or []) if value
+    }
+    verify_page = context.new_page()
+    verify_im = None
+    try:
+        verify_im = _new_im(verify_page, config)
+        if verify_im.wait_ready().get("status") != STATUS_READY:
+            return False
+        target = record.get("display") or record.get("target")
+        if not target:
+            return False
+        for hit in verify_im.iter_find_and_select([target]):
+            if hit.get("conv_id") != record.get("conv_id"):
+                continue
+            verify_page.wait_for_timeout(800)
+            current = verify_im._current_conv() or {}
+            if current.get("convId") != record.get("conv_id"):
+                continue
+            snapshot = verify_im._outgoing_sticker_snapshot(resource_key)
+            matching_ids = {
+                str(value) for value in snapshot.get("matching_ids", []) if value
+            }
+            if matching_ids - baseline_ids:
+                return True
+            # Some native-sticker bubbles do not expose Douyin's React virtual
+            # ID. The fresh page is scoped to this conversation and resource,
+            # so a count increase is the safe fallback.
+            if (
+                snapshot.get("matching_count", 0)
+                > int(record.get("baseline_count", 0) or 0)
+                and len(matching_ids) < int(snapshot.get("matching_count", 0) or 0)
+            ):
+                return True
+        return False
+    except Exception as exc:
+        logger.warning(
+            f"账号 {account_key} 好友 {record.get('display', '-')} 贴纸持久化确认失败：{exc}"
+        )
+        return False
+    finally:
+        if verify_im is not None:
+            verify_im.detach()
+        verify_page.close()
+
+
 def do_user_task(
-    browser, username, cookies, targets, account_key=None, selection_only=False
+    browser,
+    username,
+    cookies,
+    targets,
+    account_key=None,
+    selection_only=False,
+    sticker_probe=False,
 ):
-    """一个账号的流程；selection_only 只找人并校验，不输入、不发送。
+    """一个账号的流程；测试模式只找人并校验，不输入、不发送。
 
     实现委托给 `core.douyin_im.DouyinIM`：
       任务一（门禁）    DouyinIM 构造时自动完成，结论在 wait_ready() 里
@@ -128,8 +185,8 @@ def do_user_task(
 
         account_key = account_key or username
         sent_ok = sent_fail = selected_ok = 0
-        pending_targets = list(targets) if selection_only else []
-        if not selection_only:
+        pending_targets = list(targets) if (selection_only or sticker_probe) else []
+        if not selection_only and not sticker_probe:
             for target in targets:
                 record = delivery_state.get(account_key, norm(target))
                 if record and record.get("status") == "confirmed":
@@ -147,9 +204,26 @@ def do_user_task(
             logger.info(
                 f"账号 {username} 已选中好友 {friend['display']}，"
                 f"conv_id={friend.get('conv_id')}"
-                + ("（selection-only，不发送）" if selection_only else "，准备发送")
+                + (
+                    "（selection-only，不发送）"
+                    if selection_only
+                    else "（sticker-probe，不点击）"
+                    if sticker_probe
+                    else "，准备发送"
+                )
             )
             if selection_only:
+                selected_ok += 1
+                page.wait_for_timeout(800)
+                continue
+            if sticker_probe:
+                prepared = im.prepare_native_sticker(
+                    config.get("nativeStickerName", "续火花")
+                )
+                logger.info(
+                    f"账号 {username} 好友 {friend['display']} 贴纸探测成功："
+                    f"{prepared['name']} resource_key={prepared['resource_key']}（未点击、不发送）"
+                )
                 selected_ok += 1
                 page.wait_for_timeout(800)
                 continue
@@ -158,7 +232,12 @@ def do_user_task(
             record = delivery_state.get(account_key, target_key)
 
             if record and record.get("status") == "attempted":
-                if _verify_persisted(context, account_key, record, config, logger):
+                verified = (
+                    _verify_sticker_persisted(context, account_key, record, config, logger)
+                    if record.get("delivery_kind") == "douyin_sticker"
+                    else _verify_persisted(context, account_key, record, config, logger)
+                )
+                if verified:
                     record["status"] = "confirmed"
                     record["confirmed_at"] = time.time()
                     delivery_state.put(account_key, target_key, record)
@@ -172,6 +251,64 @@ def do_user_task(
                     )
                 page.wait_for_timeout(800)
                 continue
+
+            delivery_mode = config.get("deliveryMode", "text")
+            if delivery_mode == "native_sticker":
+                prepared = im.prepare_native_sticker(
+                    config.get("nativeStickerName", "续火花")
+                )
+                snapshot = prepared["snapshot"]
+                current = im._current_conv() or {}
+                if current.get("convId") != friend.get("conv_id"):
+                    raise RuntimeError(
+                        f"账号 {username} 贴纸发送前会话校验失败：目标 {friend.get('conv_id') or '-'} "
+                        f"当前={current.get('convId') or '-'}"
+                    )
+
+                record = {
+                    "status": "attempted",
+                    "delivery_kind": "douyin_sticker",
+                    "target": target_key,
+                    "display": friend.get("display"),
+                    "conv_id": friend.get("conv_id"),
+                    "sticker_name": prepared["name"],
+                    "resource_key": prepared["resource_key"],
+                    "baseline_message_ids": snapshot["matching_ids"],
+                    "baseline_count": snapshot["matching_count"],
+                    "attempted_at": time.time(),
+                }
+                delivery_state.put(account_key, target_key, record)
+
+                try:
+                    im.send_native_sticker(friend, prepared)
+                except Exception as exc:
+                    record["dispatch_error"] = str(exc)
+                    delivery_state.put(account_key, target_key, record)
+                    logger.error(
+                        f"账号 {username} 好友 {friend['display']} 原生贴纸事件结果未知：{exc}；"
+                        "已进入 at-most-once 保护，不会自动重发"
+                    )
+
+                if _verify_sticker_persisted(context, account_key, record, config, logger):
+                    record["status"] = "confirmed"
+                    record["confirmed_at"] = time.time()
+                    delivery_state.put(account_key, target_key, record)
+                    sent_ok += 1
+                    logger.info(
+                        f"账号 {username} → {friend['display']} 原生贴纸发送成功"
+                        f"（{record['sticker_name']}）"
+                    )
+                else:
+                    sent_fail += 1
+                    logger.warning(
+                        f"账号 {username} → {friend['display']} 原生贴纸未通过持久化确认；"
+                        "状态保留 attempted，本轮及后续不自动重发"
+                    )
+                page.wait_for_timeout(800)
+                continue
+
+            if delivery_mode != "text":
+                raise RuntimeError(f"不支持的 DELIVERY_MODE: {delivery_mode}")
 
             message = build_message()
             verification_text = _verification_text(message)
@@ -216,7 +353,7 @@ def do_user_task(
         logger.info(
             f"账号 {username} 扫描结束：停止原因={scan.get('stopped')} "
             f"步数={scan.get('steps')} 访问会话={scan.get('visited')} "
-            f"选择成功={selected_ok if selection_only else '-'} "
+            f"选择成功={selected_ok if (selection_only or sticker_probe) else '-'} "
             f"发送成功={sent_ok} 发送失败={sent_fail}"
         )
         if scan.get("missing"):
@@ -237,13 +374,14 @@ def do_user_task(
             reasons.append(f"未找到目标={scan['missing']}")
         if scan.get("select_failed"):
             reasons.append(f"选中失败={scan['select_failed']}")
-        if sent_fail and not selection_only:
+        if sent_fail and not selection_only and not sticker_probe:
             reasons.append(f"发送失败={sent_fail}")
         expected = len(set(targets))
-        completed = selected_ok if selection_only else sent_ok
+        completed = selected_ok if (selection_only or sticker_probe) else sent_ok
         if completed != expected:
             reasons.append(
-                f"{'选择成功' if selection_only else '发送成功'}={completed}/{expected}"
+                f"{'选择成功' if (selection_only or sticker_probe) else '发送成功'}="
+                f"{completed}/{expected}"
             )
         if reasons:
             raise RuntimeError(f"账号 {username} 任务未完成：" + "；".join(reasons))
@@ -263,12 +401,17 @@ def do_user_task(
         context.close()  # 任务完成后关闭上下文
 
 
-def runTasks(selection_only=False):
+def runTasks(selection_only=False, sticker_probe=False):
     # 检查是否启用多任务和任务数量
     # 创建信号量以限制并发任务数量
-    logger.info(
-        "开始执行任务" + ("（selection-only：不输入、不发送）" if selection_only else "")
+    mode_note = (
+        "（selection-only：不输入、不发送）"
+        if selection_only
+        else "（sticker-probe：不点击、不发送）"
+        if sticker_probe
+        else ""
     )
+    logger.info("开始执行任务" + mode_note)
     logger.debug(f"当前配置如下：")
     logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
     logger.debug(f"一言类型: {config['hitokotoTypes']}")
@@ -298,6 +441,7 @@ def runTasks(selection_only=False):
                 # send_state.json format; unique_id migration can come later.
                 account_key=username,
                 selection_only=selection_only,
+                sticker_probe=sticker_probe,
             )
             logger.info(f"账号 {username} 任务完成")
         finally:

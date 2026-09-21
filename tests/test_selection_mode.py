@@ -54,6 +54,9 @@ class _IM:
     def fold_groups(self):
         return {}
 
+    def prepare_native_sticker(self, name):
+        return {"name": name, "resource_key": "sticker-key"}
+
     def detach(self):
         self.detached = True
 
@@ -72,6 +75,23 @@ class SelectionModeTests(unittest.TestCase):
         ):
             tasks.do_user_task(
                 _Browser(), "account", [], ["Rick", "Ken"], selection_only=True
+            )
+
+        self.assertTrue(_IM.instances[0].detached)
+
+    def test_sticker_probe_never_reads_state_or_sends(self):
+        _IM.instances.clear()
+        with patch.object(tasks, "DouyinIM", _IM), patch.object(
+            tasks.delivery_state,
+            "get",
+            side_effect=AssertionError("sticker probe must not read send state"),
+        ), patch.object(
+            tasks,
+            "build_message",
+            side_effect=AssertionError("sticker probe must not build a message"),
+        ):
+            tasks.do_user_task(
+                _Browser(), "account", [], ["Rick", "Ken"], sticker_probe=True
             )
 
         self.assertTrue(_IM.instances[0].detached)
