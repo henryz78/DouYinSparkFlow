@@ -35,6 +35,7 @@ LOG_LEVEL_OPTIONS = ["Debug", "Info", "Warning", "Error"]
 # ---------------------------------------------------------------------------
 DEFAULT_PROXY_ADDRESS = ""
 DEFAULT_RUN_TIME = "09:00:00"
+DEFAULT_CRON_RANDOM_WINDOW_SECONDS = 0
 DEFAULT_TZ = "Asia/Shanghai"
 DEFAULT_MESSAGE_TEMPLATE = "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]"
 DEFAULT_HITOKOTO_TYPES = ["文学", "影视", "诗词", "哲学"]
@@ -64,6 +65,7 @@ BASE_ENV_KEYS = [
     "CRON_HOUR",
     "CRON_MINUTE",
     "CRON_SECOND",
+    "CRON_RANDOM_WINDOW_SECONDS",
     "TZ",
     "MESSAGE_TEMPLATE",
     "HITOKOTO_TYPES",
@@ -185,6 +187,7 @@ class Account:
 class Config:
     proxy_address: str = DEFAULT_PROXY_ADDRESS
     run_time: str = DEFAULT_RUN_TIME
+    cron_random_window_seconds: int = DEFAULT_CRON_RANDOM_WINDOW_SECONDS
     tz: str = DEFAULT_TZ
     # 内存里保存真实换行，写盘时才转成字面 \n
     message_template: str = DEFAULT_MESSAGE_TEMPLATE
@@ -220,6 +223,9 @@ class Config:
             "CRON_HOUR": hour,
             "CRON_MINUTE": minute,
             "CRON_SECOND": second,
+            "CRON_RANDOM_WINDOW_SECONDS": str(
+                max(0, int(self.cron_random_window_seconds))
+            ),
             "TZ": self.tz or DEFAULT_TZ,
             "MESSAGE_TEMPLATE": template,
             "HITOKOTO_TYPES": json.dumps(
@@ -308,6 +314,12 @@ class Config:
         return cls(
             proxy_address=text("PROXY_ADDRESS"),
             run_time=run_time,
+            cron_random_window_seconds=number(
+                "CRON_RANDOM_WINDOW_SECONDS",
+                DEFAULT_CRON_RANDOM_WINDOW_SECONDS,
+                0,
+                86399,
+            ),
             tz=text("TZ", DEFAULT_TZ) or DEFAULT_TZ,
             # 磁盘上是字面 \n，换回真实换行方便在文本框里编辑。
             # 字面 \r\n 先收成字面 \n 再解 —— 但注意 `.replace("\\n","\n")` 对

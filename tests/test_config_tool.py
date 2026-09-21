@@ -95,6 +95,10 @@ class EnvKeysTests(unittest.TestCase):
             with self.subTest(key=k):
                 self.assertIsInstance(v, str, f"{k} 不是字符串")
 
+    def test_random_window_survives_config_tool_roundtrip(self):
+        cfg = models.Config.from_env_map({"CRON_RANDOM_WINDOW_SECONDS": "7200"})
+        self.assertEqual(cfg.to_env_map()["CRON_RANDOM_WINDOW_SECONDS"], "7200")
+
 
 class DefaultsAlignmentTests(unittest.TestCase):
     """★ 四处默认值必须一致（2026-09-19 对齐过一轮）。

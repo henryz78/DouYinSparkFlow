@@ -8,6 +8,13 @@ set -euo pipefail
 # 选 fc 的两种办法（任选其一）：
 #   1. 函数配置里把「启动命令」覆盖为 /app/docker/entrypoint-fc.sh（推荐，不依赖环境变量）
 #   2. 函数环境变量设 LAUNCH_MODE=fc
+
+# docker compose run ... <command> 这类一次性命令必须直接执行并退出，
+# 不能因为默认 LAUNCH_MODE=cron 又启动一个新的定时器。
+if [[ $# -gt 0 ]]; then
+  exec "$@"
+fi
+
 LAUNCH_MODE="${LAUNCH_MODE:-cron}"
 LAUNCH_MODE="${LAUNCH_MODE,,}"  # 控制台里手打容易填成 FC / Cron，统一转小写
 

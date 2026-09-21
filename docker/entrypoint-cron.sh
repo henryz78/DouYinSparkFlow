@@ -55,7 +55,11 @@ if [[ -z "$CRON_HOUR" || -z "$CRON_MINUTE" || -z "$CRON_SECOND" ]]; then
   exit 1
 fi
 
-CRON_SCHEDULE="${CRON_MINUTE} ${CRON_HOUR} * * *"
+# Fixed mode keeps the official one-minute cron entry.  With a random window,
+# the helper expands this to every minute in the configured window.
+mapfile -t CRON_INFO < <(python /app/docker/random_scheduler.py cron)
+CRON_SCHEDULE="${CRON_INFO[0]}"
+SCHEDULE_DESCRIPTION="${CRON_INFO[1]}"
 
 cat > /etc/cron.d/douyin-spark-flow <<EOF
 SHELL=/bin/bash
@@ -66,7 +70,7 @@ EOF
 chmod 0644 /etc/cron.d/douyin-spark-flow
 
 echo "[docker] timezone: ${TZ:-UTC}"
-echo "[docker] cron schedule: ${CRON_SCHEDULE} (+${CRON_SECOND}s)"
+echo "[docker] cron schedule: ${CRON_SCHEDULE} (${SCHEDULE_DESCRIPTION})"
 echo "[docker] container started, waiting for scheduled runs"
 
 exec cron -f
