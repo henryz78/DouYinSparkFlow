@@ -1918,7 +1918,9 @@ class DouyinIM:
             click_target = item.locator("img").first
             if click_target.count() == 0:
                 raise RuntimeError(f"原生贴纸 {name} 缺少贴纸图片")
-            deadline = time.monotonic() + min(self.ready_timeout, 10)
+            # 20s 硬顶：生产环境每次都是全新浏览器实例，没有磁盘缓存，贴纸图片
+            # 要现从 CDN 下载，10s 在冷启动时经常不够（实测会误报"仍在加载"）。
+            deadline = time.monotonic() + min(self.ready_timeout, 20)
             while True:
                 ready = click_target.evaluate(
                     """el => {
