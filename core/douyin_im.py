@@ -1918,9 +1918,12 @@ class DouyinIM:
             click_target = item.locator("img").first
             if click_target.count() == 0:
                 raise RuntimeError(f"原生贴纸 {name} 缺少贴纸图片")
-            # 20s 硬顶：生产环境每次都是全新浏览器实例，没有磁盘缓存，贴纸图片
-            # 要现从 CDN 下载，10s 在冷启动时经常不够（实测会误报"仍在加载"）。
-            deadline = time.monotonic() + min(self.ready_timeout, 20)
+            # 60s 硬顶：实测这张图是否命中 CDN 边缘缓存差异极大——同一天内被
+            # 请求过就 <1s 就绪，隔一段时间没人请求过（每天第一次大概率如此）
+            # 实测能到 20s 仍未就绪。生产环境每天只发一次，天天都是"第一次"，
+            # 所以按最坏情况留够余量，而不是按热缓存的理想情况估。
+            wait_start = time.monotonic()
+            deadline = wait_start + min(self.ready_timeout, 60)
             while True:
                 ready = click_target.evaluate(
                     """el => {
@@ -1939,6 +1942,7 @@ class DouyinIM:
                     and ready.get("loaded")
                     and not ready.get("blocked")
                 ):
+                    logger.debug(f"[STICKER] 图片就绪耗时={time.monotonic() - wait_start:.2f}s")
                     break
                 if time.monotonic() >= deadline:
                     raise RuntimeError(f"原生贴纸 {name} 图片仍在加载")
