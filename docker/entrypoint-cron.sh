@@ -64,6 +64,7 @@ SCHEDULE_DESCRIPTION="${CRON_INFO[1]}"
 cat > /etc/cron.d/douyin-spark-flow <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CRON_TZ=${TZ:-Asia/Shanghai}
 ${CRON_SCHEDULE} root /app/docker/run-task.sh >> /proc/1/fd/1 2>> /proc/1/fd/2
 EOF
 

@@ -16,11 +16,12 @@ logger = setup_logger(level=config.get("logLevel", "Info"))
 
 
 def _verification_text(message):
-    return re.sub(r"\[[^\[\]\n]+\]", "", (message or "")).replace("\\n", "\n")
+    stripped = re.sub(r"\[[^\[\]\n]+\]", "", (message or ""))
+    return (stripped if stripped.strip() else (message or "")).replace("\\n", "\n")
 
 
 def _canonical_text(text):
-    return re.sub(r"\s+", "", norm(text or ""))
+    return re.sub(r"\s+", "", _verification_text(norm(text or "")))
 
 
 def _matching_outgoing_count(messages, expected):
@@ -52,15 +53,17 @@ def _verify_persisted(context, account_key, record, config, logger):
         for hit in verify_im.iter_find_and_select([target]):
             if hit.get("conv_id") != record.get("conv_id"):
                 continue
-            verify_page.wait_for_timeout(800)
-            current = verify_im._current_conv() or {}
-            if current.get("convId") != record.get("conv_id"):
-                continue
-            count = _matching_outgoing_count(
-                verify_im._outgoing_messages(), record.get("verification_text", "")
-            )
-            if count > int(record.get("baseline_count", 0) or 0):
-                return True
+            for _ in range(3):
+                verify_page.wait_for_timeout(800)
+                current = verify_im._current_conv() or {}
+                if current.get("convId") != record.get("conv_id"):
+                    continue
+                count = _matching_outgoing_count(
+                    verify_im._outgoing_messages(), record.get("verification_text", "")
+                )
+                if count > int(record.get("baseline_count", 0) or 0):
+                    return True
+            return False
         return False
     except Exception as exc:
         logger.warning(
@@ -83,6 +86,7 @@ def _verify_sticker_persisted(context, account_key, record, config, logger):
     }
     verify_page = context.new_page()
     verify_im = None
+    increased_count = None
     try:
         verify_im = _new_im(verify_page, config)
         if verify_im.wait_ready().get("status") != STATUS_READY:
@@ -93,25 +97,30 @@ def _verify_sticker_persisted(context, account_key, record, config, logger):
         for hit in verify_im.iter_find_and_select([target]):
             if hit.get("conv_id") != record.get("conv_id"):
                 continue
-            verify_page.wait_for_timeout(800)
-            current = verify_im._current_conv() or {}
-            if current.get("convId") != record.get("conv_id"):
-                continue
-            snapshot = verify_im._outgoing_sticker_snapshot(resource_key)
-            matching_ids = {
-                str(value) for value in snapshot.get("matching_ids", []) if value
-            }
-            if matching_ids - baseline_ids:
-                return True
-            # Some native-sticker bubbles do not expose Douyin's React virtual
-            # ID. The fresh page is scoped to this conversation and resource,
-            # so a count increase is the safe fallback.
-            if (
-                snapshot.get("matching_count", 0)
-                > int(record.get("baseline_count", 0) or 0)
-                and len(matching_ids) < int(snapshot.get("matching_count", 0) or 0)
-            ):
-                return True
+            for _ in range(3):
+                verify_page.wait_for_timeout(800)
+                current = verify_im._current_conv() or {}
+                if current.get("convId") != record.get("conv_id"):
+                    continue
+                snapshot = verify_im._outgoing_sticker_snapshot(resource_key)
+                matching_ids = {
+                    str(value) for value in snapshot.get("matching_ids", []) if value
+                }
+                if matching_ids - baseline_ids:
+                    return True
+                count = int(snapshot.get("matching_count", 0) or 0)
+                baseline_count = int(record.get("baseline_count", 0) or 0)
+                # Some sticker bubbles do not expose a virtual React id. In
+                # that case accept a count increase only after observing the
+                # same increased count twice, so a delayed history render on
+                # the first poll is not immediately treated as a new send.
+                if count > baseline_count:
+                    if increased_count == count:
+                        return True
+                    increased_count = count
+                else:
+                    increased_count = None
+            return False
         return False
     except Exception as exc:
         logger.warning(
@@ -185,11 +194,15 @@ def do_user_task(
         )
 
         account_key = account_key or username
+        task_day = delivery_state.today()
+        if not targets:
+            raise RuntimeError(f"账号 {username} 未配置有效目标好友")
+
         sent_ok = sent_fail = selected_ok = 0
         pending_targets = list(targets) if (selection_only or sticker_probe) else []
         if not selection_only and not sticker_probe:
             for target in targets:
-                record = delivery_state.get(account_key, norm(target))
+                record = delivery_state.get(account_key, norm(target), day=task_day)
                 if record and record.get("status") == "confirmed":
                     sent_ok += 1
                     logger.info(f"账号 {username} 好友 {target} 今日已确认发送，跳过")
@@ -230,7 +243,13 @@ def do_user_task(
                 continue
 
             target_key = norm(friend.get("display") or friend.get("conv_id"))
-            record = delivery_state.get(account_key, target_key)
+            record = delivery_state.get(account_key, target_key, day=task_day)
+
+            if record and record.get("status") == "confirmed":
+                sent_ok += 1
+                logger.info(f"账号 {username} 好友 {friend['display']} 今日已确认发送，跳过重发")
+                page.wait_for_timeout(800)
+                continue
 
             if record and record.get("status") == "attempted":
                 verified = (
@@ -241,7 +260,7 @@ def do_user_task(
                 if verified:
                     record["status"] = "confirmed"
                     record["confirmed_at"] = time.time()
-                    delivery_state.put(account_key, target_key, record)
+                    delivery_state.put(account_key, target_key, record, day=task_day)
                     sent_ok += 1
                     logger.info(f"账号 {username} 好友 {friend['display']} 已确认上次发送，跳过重发")
                 else:
@@ -278,13 +297,13 @@ def do_user_task(
                     "baseline_count": snapshot["matching_count"],
                     "attempted_at": time.time(),
                 }
-                delivery_state.put(account_key, target_key, record)
+                delivery_state.put(account_key, target_key, record, day=task_day)
 
                 try:
                     im.send_native_sticker(friend, prepared)
                 except Exception as exc:
                     record["dispatch_error"] = str(exc)
-                    delivery_state.put(account_key, target_key, record)
+                    delivery_state.put(account_key, target_key, record, day=task_day)
                     logger.error(
                         f"账号 {username} 好友 {friend['display']} 原生贴纸事件结果未知：{exc}；"
                         "已进入 at-most-once 保护，不会自动重发"
@@ -293,7 +312,7 @@ def do_user_task(
                 if _verify_sticker_persisted(context, account_key, record, config, logger):
                     record["status"] = "confirmed"
                     record["confirmed_at"] = time.time()
-                    delivery_state.put(account_key, target_key, record)
+                    delivery_state.put(account_key, target_key, record, day=task_day)
                     sent_ok += 1
                     logger.info(
                         f"账号 {username} → {friend['display']} 原生贴纸发送成功"
@@ -328,14 +347,21 @@ def do_user_task(
                     "baseline_count": baseline_count,
                     "attempted_at": time.time(),
                 },
+                day=task_day,
             )
             r = im.type_and_send(friend, message)
-            record = delivery_state.get(account_key, target_key) or {}
-            if _verify_persisted(context, account_key, record, config, logger):
+            record = delivery_state.get(account_key, target_key, day=task_day) or {}
+            http_confirmed = bool(
+                r
+                and r.get("ok")
+                and r.get("via") in ("http", "http+dom")
+                and r.get("message_id")
+            )
+            if http_confirmed or _verify_persisted(context, account_key, record, config, logger):
                 record["status"] = "confirmed"
                 record["confirmed_at"] = time.time()
-                record["receipt_ok"] = bool(r["ok"])
-                delivery_state.put(account_key, target_key, record)
+                record["receipt_ok"] = bool(r and r.get("ok"))
+                delivery_state.put(account_key, target_key, record, day=task_day)
                 sent_ok += 1
                 logger.info(
                     f"账号 {username} → {friend['display']} 发送成功"
@@ -368,6 +394,13 @@ def do_user_task(
                 f"账号 {username} 找到但选中失败：{scan['select_failed']}"
             )
 
+        folds = im.fold_groups()
+        if any(v for v in folds.values() if v):
+            logger.warning(
+                f"账号 {username} 注意：折叠组/陌生人组里有内容 {folds}，"
+                f"主列表扫不到，目标可能被折叠"
+            )
+
         # 找到但没有选中、或发送未确认，都必须让任务失败；否则调度器会把
         # "发送 0 条" 当成正常完成，下一轮又无法区分真正的成功。
         reasons = []
@@ -386,13 +419,6 @@ def do_user_task(
             )
         if reasons:
             raise RuntimeError(f"账号 {username} 任务未完成：" + "；".join(reasons))
-
-        folds = im.fold_groups()
-        if any(v for v in folds.values() if v):
-            logger.warning(
-                f"账号 {username} 注意：折叠组/陌生人组里有内容 {folds}，"
-                f"主列表扫不到，目标可能被折叠"
-            )
     finally:
         if im is not None:
             try:
@@ -423,6 +449,13 @@ def runTasks(selection_only=False, sticker_probe=False):
             f"用户: {user.get('username', '未知用户')}, 目标好友: {user['targets']}"
         )
 
+    if not userData:
+        logger.error("未检测到有效账号配置 (userData 为空)")
+        if selection_only or sticker_probe:
+            raise RuntimeError("未检测到有效账号配置 (userData 为空)")
+        return
+
+    failed_accounts = []
     for user in userData:
         cookies = user["cookies"]
         # 归一化在**这里**做（配置读取端不做）：DouyinIM._match 内部用同一套 norm，
@@ -448,23 +481,33 @@ def runTasks(selection_only=False, sticker_probe=False):
                 sticker_probe=sticker_probe,
             )
         except Exception as exc:
-            notifier.notify_failure(
-                username,
-                targets,
-                str(exc),
-                delivery_mode=config.get("deliveryMode", "text"),
-                test_mode=test_mode,
-            )
-            raise
+            failed_accounts.append((username, str(exc)))
+            try:
+                notifier.notify_failure(
+                    username,
+                    targets,
+                    str(exc),
+                    delivery_mode=config.get("deliveryMode", "text"),
+                    test_mode=test_mode,
+                )
+            except Exception as nerr:
+                logger.warning(f"Telegram 失败通知发送异常: {nerr}")
+            logger.error(f"账号 {username} 任务失败: {exc}")
         else:
-            notifier.notify_success(
-                username,
-                targets,
-                delivery_mode=config.get("deliveryMode", "text"),
-                test_mode=test_mode,
-            )
+            try:
+                notifier.notify_success(
+                    username,
+                    targets,
+                    delivery_mode=config.get("deliveryMode", "text"),
+                    test_mode=test_mode,
+                )
+            except Exception as nerr:
+                logger.warning(f"Telegram 成功通知发送异常: {nerr}")
             logger.info(f"账号 {username} 任务完成")
         finally:
             # 关闭浏览器实例
             if browser is not None:
                 browser.close()
+
+    if failed_accounts:
+        raise RuntimeError(f"部分账号任务未完成: {failed_accounts}")

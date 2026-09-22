@@ -26,8 +26,12 @@ if [[ "$RANDOM_RUN" == "0" && -n "${CRON_SECOND:-}" && "${CRON_SECOND}" != "0" ]
   sleep "${CRON_SECOND}"
 fi
 cd /app
+set +e
 python main.py task
+TASK_STATUS=$?
+set -e
 if [[ "$RANDOM_RUN" == "1" ]]; then
   python /app/docker/random_scheduler.py complete
 fi
 echo "[docker] $(date '+%Y-%m-%d %H:%M:%S') scheduled task finished"
+exit "$TASK_STATUS"

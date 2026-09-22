@@ -16,7 +16,13 @@ def backup_path() -> Path:
 
 
 def today() -> str:
-    return time.strftime("%Y-%m-%d")
+    tz_name = os.getenv("TZ", "Asia/Shanghai").strip() or "Asia/Shanghai"
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        return datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d")
+    except Exception:
+        return time.strftime("%Y-%m-%d")
 
 
 def _read(path: Path) -> dict:
@@ -86,11 +92,12 @@ def save(state: dict) -> None:
         if previous is not None:
             _write(backup_path(), previous)
     _write(path, state)
-    try:
-        _write(backup_path(), state)
-    except OSError:
-        # The primary write is already atomic and valid; keep the older backup.
-        pass
+    if not backup_path().exists():
+        try:
+            _write(backup_path(), state)
+        except OSError:
+            # The primary write is already atomic and valid; keep the older backup.
+            pass
 
 
 def get(account: str, target: str, day: str | None = None) -> dict | None:

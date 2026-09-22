@@ -20,37 +20,52 @@ if os.path.exists(".env"):
 
     load_dotenv(".env")
 
-# 优先级：argv 子命令 > RUN_MODE 环境变量 > 默认 task
-MODE = (sys.argv[1] if len(sys.argv) > 1 else os.getenv("RUN_MODE", "task")).strip().lower()
-
-
 def main():
-    if MODE in {"fc", "serve"}:
-        from fc_server import serve
+    args = [arg.strip().lower() for arg in sys.argv[1:]]
+    normalized_flags = {arg.lstrip("-") for arg in args}
+    env_mode = os.getenv("RUN_MODE", "task").strip().lower().lstrip("-")
 
-        serve()
-        return
-
-    if MODE in {"selection", "select"}:
+    # 优先判定安全测试模式与贴纸探测模式（防止 'task --selection-only' 误入正式发送）
+    if normalized_flags & {"selection", "select", "selection_only", "selection-only"} or (
+        not args and env_mode in {"selection", "select", "selection_only", "selection-only"}
+    ):
         from core.tasks import runTasks
 
         runTasks(selection_only=True)
         return
 
-    if MODE in {"sticker_probe", "sticker-probe"}:
+    if normalized_flags & {"sticker_probe", "sticker-probe"} or (
+        not args and env_mode in {"sticker_probe", "sticker-probe"}
+    ):
         from core.tasks import runTasks
 
         runTasks(sticker_probe=True)
         return
 
-    if MODE in {"task", "run", "cli", ""}:
+    if normalized_flags & {"fc", "serve"} or (not args and env_mode in {"fc", "serve"}):
+        from fc_server import serve
+
+        serve()
+        return
+
+    # 有 argv 时只信任 argv 本身；没有 argv 时才退回看 RUN_MODE。
+    # 二者不能混着判——否则任何拼写错误的子命令都会因为 RUN_MODE 默认值是
+    # "task" 而被无声地当成正式发送模式放行（曾经的真实回归）。
+    if not args:
+        if env_mode in {"task", "run", "cli", ""}:
+            from core.tasks import runTasks
+
+            runTasks()
+            return
+    elif normalized_flags & {"task", "run", "cli", ""}:
         from core.tasks import runTasks
 
         runTasks()
         return
 
     print(
-        f"未知启动模式: {MODE}（可选：task / selection / sticker_probe / fc）",
+        f"未知启动模式: {' '.join(sys.argv[1:]) or ('RUN_MODE=' + env_mode)}"
+        "（可选：task / selection / sticker_probe / fc）",
         file=sys.stderr,
     )
     sys.exit(2)

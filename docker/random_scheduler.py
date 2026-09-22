@@ -22,11 +22,12 @@ STATE_PATH = Path(
 
 def settings():
     values = dotenv_values(ENV_PATH)
-    hour = int(values.get("CRON_HOUR", "9"))
-    minute = int(values.get("CRON_MINUTE", "0"))
-    second = int(values.get("CRON_SECOND", "0"))
-    window = int(values.get("CRON_RANDOM_WINDOW_SECONDS", "0"))
-    tz = ZoneInfo(values.get("TZ", "UTC"))
+    tz_name = os.environ.get("TZ") or values.get("TZ") or "Asia/Shanghai"
+    hour = int(os.environ.get("CRON_HOUR") or values.get("CRON_HOUR", "9"))
+    minute = int(os.environ.get("CRON_MINUTE") or values.get("CRON_MINUTE", "0"))
+    second = int(os.environ.get("CRON_SECOND") or values.get("CRON_SECOND", "0"))
+    window = int(os.environ.get("CRON_RANDOM_WINDOW_SECONDS") or values.get("CRON_RANDOM_WINDOW_SECONDS", "0"))
+    tz = ZoneInfo(tz_name)
     start_seconds = hour * 3600 + minute * 60 + second
     if not 0 <= start_seconds < 86400:
         raise SystemExit("invalid cron start time")
@@ -44,6 +45,8 @@ def _write_state(data: dict):
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(data, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp_name, STATE_PATH)
     finally:
         try:
@@ -78,11 +81,18 @@ def before_run():
 
     now = datetime.now(tz)
     start = datetime.combine(now.date(), dt_time(hour, minute, second), tzinfo=tz)
+    end = start + timedelta(seconds=window)
     signature = f"{hour:02d}:{minute:02d}:{second:02d}+{window}"
     state = _load_state()
 
     if state.get("day") != now.date().isoformat() or state.get("signature") != signature:
-        target = start + timedelta(seconds=secrets.randbelow(window))
+        if now >= end:
+            target = now
+        elif now > start:
+            remaining_window = int((end - now).total_seconds())
+            target = now + timedelta(seconds=secrets.randbelow(max(1, remaining_window)))
+        else:
+            target = start + timedelta(seconds=secrets.randbelow(max(1, window)))
         state = {
             "day": now.date().isoformat(),
             "signature": signature,
@@ -101,6 +111,13 @@ def before_run():
 
     target = datetime.fromtimestamp(int(state["target_epoch"]), tz)
     remaining = (target - now).total_seconds()
+    if remaining <= 0:
+        if remaining <= -60:
+            print(
+                f"[docker] {now:%Y-%m-%d %H:%M:%S} target time ({target:%H:%M:%S}) "
+                "already passed, running catch-up task now"
+            )
+        raise SystemExit(10)
     if remaining >= 60:
         raise SystemExit(11)  # this minute is not the chosen minute
     if remaining > 0:

@@ -54,7 +54,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpangocairo-1.0-0 libcairo-gobject2 libgdk-pixbuf-2.0-0 \
     libxss1 libxtst6 fonts-liberation \
     fontconfig \
-    curl ca-certificates \
+    curl ca-certificates tzdata \
     && if [ "${ENABLE_HEADED}" = "true" ]; then \
          apt-get install -y --no-install-recommends xvfb xdotool openbox; \
        fi \

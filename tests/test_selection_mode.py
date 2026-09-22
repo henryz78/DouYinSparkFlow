@@ -96,6 +96,47 @@ class SelectionModeTests(unittest.TestCase):
 
         self.assertTrue(_IM.instances[0].detached)
 
+    def test_normal_mode_empty_targets_fails_loudly(self):
+        """正式模式下没有配置目标好友也必须明确失败，不能被当成"无事可做"悄悄跳过成功。"""
+        _IM.instances.clear()
+        with patch.object(tasks, "DouyinIM", _IM):
+            with self.assertRaises(RuntimeError):
+                tasks.do_user_task(_Browser(), "account", [], [])
+
+        self.assertTrue(_IM.instances[0].detached)
+
+    def test_main_dispatches_selection_only(self):
+        import main
+        with patch("sys.argv", ["main.py", "--selection-only"]), patch("core.tasks.runTasks") as mock_run:
+            main.main()
+            mock_run.assert_called_once_with(selection_only=True)
+
+        with patch("sys.argv", ["main.py", "task", "--selection-only"]), patch("core.tasks.runTasks") as mock_run:
+            main.main()
+            mock_run.assert_called_once_with(selection_only=True)
+
+    def test_main_rejects_unrecognized_argv_instead_of_running_task(self):
+        """拼写错误的子命令必须报错退出，绝不能悄悄落到正式发送模式。"""
+        import main
+        with patch("sys.argv", ["main.py", "selction-only"]), patch.dict(
+            os.environ
+        ), patch("core.tasks.runTasks") as mock_run:
+            os.environ.pop("RUN_MODE", None)
+            with self.assertRaises(SystemExit) as ctx:
+                main.main()
+            self.assertEqual(ctx.exception.code, 2)
+            mock_run.assert_not_called()
+
+    def test_main_rejects_unrecognized_run_mode_when_no_argv(self):
+        import main
+        with patch("sys.argv", ["main.py"]), patch.dict(
+            os.environ, {"RUN_MODE": "banana"}
+        ), patch("core.tasks.runTasks") as mock_run:
+            with self.assertRaises(SystemExit) as ctx:
+                main.main()
+            self.assertEqual(ctx.exception.code, 2)
+            mock_run.assert_not_called()
+
 
 class ConfigUnitTests(unittest.TestCase):
     def tearDown(self):

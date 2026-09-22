@@ -254,8 +254,16 @@ JS_CURRENT_CONV = """(() => {
   const title = t ? t.textContent.replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim() : null;
   const idx = [...document.querySelectorAll('[data-e2e="conversation-item"]')].indexOf(el);
   let convId = null;
-  const keys = Object.keys(el).filter(k => k.startsWith('__reactFiber$'));
+  const keys = Object.keys(el).filter(k => k.startsWith('__reactProps$') || k.startsWith('__reactFiber$'));
   for (const k of keys) {
+    if (k.startsWith('__reactProps$')) {
+      const p = el[k];
+      if (p && p.conversation && (p.conversation.id || p.conversation.conversationId)) {
+        convId = p.conversation.id || p.conversation.conversationId;
+        break;
+      }
+      continue;
+    }
     let f = el[k], d = 0;
     while (f && d++ < 30) {
       const p = f.memoizedProps;
@@ -322,7 +330,7 @@ JS_OUTGOING_MESSAGES = """(() => {
 
 JS_OUTGOING_STICKER_SNAPSHOT = """(resourceKey) => {
   const boxes = Array.from(document.querySelectorAll(
-    '.messageMessageBoxcontentBox.messageMessageBoxisFromMe'
+    '.MessageBoxContentisFromMe, .messageMessageBoxcontentBox.messageMessageBoxisFromMe'
   ));
 
   function virtualIdFor(box) {
@@ -644,7 +652,7 @@ def scrape_ssr(html):
     elif raw.get("is_login") == "false" or raw.get("not_exist_login_cookie") == "true":
         out["verdict"] = "logged_out"
     elif not out["user_id"] and raw.get("is_login") is None:
-        out["verdict"] = "logged_out"
+        out["verdict"] = "unknown"
     return out
 
 
@@ -699,7 +707,7 @@ def _norm(s):
         return ""
     v = unicodedata.normalize("NFKC", str(s))
     v = v.replace("\u3000", " ").replace("\xa0", " ")
-    v = v.replace("\u200b", "").replace("\ufeff", "")
+    v = re.sub(r"[\u200b-\u200f\u2060\ufeff\ufe0e\ufe0f\u200d]", "", v)
     return re.sub(r"\s+", "", v).strip().lower()
 
 
@@ -1288,6 +1296,7 @@ class DouyinIM:
         window = []
         steps = 0
         empty_rounds = 0
+        bottom_stall = 0
         failed_windows = 0
         stopped = "exhausted"
         finished = False        # while 自然跑完才算扫全；被外部 break 不算
@@ -1331,10 +1340,21 @@ class DouyinIM:
                 if probe.get("atBottom"):
                     self._snooze(1000, "到底防抖")    # 跨过前端 1000ms 防抖
                     after = self._scroll_probe()
-                    if after.get("scrollHeight", 0) <= probe.get("scrollHeight", 0):
-                        logger.info("[SCAN] 🏁 已到底且高度不再增长，扫描结束")
-                        stopped = "reach-bottom"
-                        break
+                    grew = after.get("scrollHeight", 0) > probe.get("scrollHeight", 0)
+                    if not grew and getattr(self.mon, "list_has_more", False):
+                        self._snooze(1200, "分页拉取缓冲")
+                        after = self._scroll_probe()
+                        grew = after.get("scrollHeight", 0) > probe.get("scrollHeight", 0)
+                    if grew:
+                        # 无论是立刻看到增长还是靠缓冲等出来的，都算真的还在长，
+                        # 熔断计数器必须清零，否则慢网络下会被多次"缓冲才长"误判成到底。
+                        bottom_stall = 0
+                    else:
+                        bottom_stall += 1
+                        if bottom_stall >= 3 or not getattr(self.mon, "list_has_more", False):
+                            logger.info("[SCAN] 🏁 已到底且高度不再增长，扫描结束")
+                            stopped = "reach-bottom"
+                            break
                     logger.debug("[SCAN] ⬇ 到底后高度增长，继续加载")
                     empty_rounds = 0
                     continue
@@ -1498,8 +1518,12 @@ class DouyinIM:
                 return
 
     def _match(self, item, pending):
-        """匹配目标。优先级：备注 > 昵称 > 抖音号 > uid/sec_uid > 标题 > 子串。"""
-        order = ("remark", "nickname", "douyin_id", "uid", "sec_uid", "title")
+        """匹配目标。优先级：备注 > 昵称 > 抖音号 > 初始抖音号 > uid/sec_uid > 标题。"""
+        if item.get("is_group") is not False:
+            # 群/未知都不参与匹配：_is_group() 判不出来时返回 None，
+            # 不确定就不能当成单聊去发，宁可这一条漏扫。
+            return None, None
+        order = ("remark", "nickname", "douyin_id", "short_id", "uid", "sec_uid", "title", "display")
         for field in order:
             val = item.get(field)
             if not val:
@@ -1507,12 +1531,6 @@ class DouyinIM:
             n = _norm(val)
             if n and n in pending:
                 return n, field
-        # 子串兜底：目标出现在显示名里
-        joined = " ".join(_norm(item.get(f) or "") for f in
-                          ("display", "title", "nickname", "remark"))
-        for n, raw in pending.items():
-            if n and n in joined:
-                return n, "fuzzy"
         return None, None
 
     def _snooze(self, ms: int, label: str = "等待") -> None:
@@ -1566,7 +1584,7 @@ class DouyinIM:
             idx = self._dom_index_of(want)
             if idx is None:
                 logger.debug(f"[SEL] 第 {i+1} 次：目标不在当前窗口，先滚回来")
-                self._scroll_to(item.get("data_index", 0) * ROW_HEIGHT)
+                self._scroll_to((item.get("data_index") or 0) * ROW_HEIGHT)
                 self.page.wait_for_timeout(400)
                 idx = self._dom_index_of(want)
                 if idx is None:
@@ -1890,7 +1908,8 @@ class DouyinIM:
                 continue
             image = item.locator("img").first
             src = image.get_attribute("src") if image.count() else ""
-            resource_key = urlsplit(src or "").path.rsplit("/", 1)[-1]
+            raw_key = urlsplit(src or "").path.rsplit("/", 1)[-1]
+            resource_key = raw_key.split("~")[0] or raw_key
             if not resource_key:
                 raise RuntimeError(f"原生贴纸 {name} 缺少资源标识")
             # The panel can leave a loading layer over the image. Wait until

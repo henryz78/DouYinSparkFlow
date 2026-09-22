@@ -3,7 +3,10 @@ import sys
 import traceback
 from pathlib import Path
 
-from cloakbrowser import launch
+try:
+    from cloakbrowser import launch
+except ImportError:
+    launch = None
 from utils.config import DEBUG, get_config
 
 # 浏览器二进制的定位走 cloakbrowser 的约定（不是 Playwright 的 PLAYWRIGHT_BROWSERS_PATH）：
@@ -42,6 +45,10 @@ def get_browser(fingerprint=None):
     if fingerprint:
         BASE_CHROME_ARGS.append(f"--fingerprint={str(fingerprint)}")
 
+    if launch is None:
+        print("未检测到 CloakBrowser 模块，请先安装: pip install -r requirements.txt")
+        sys.exit(1)
+
     try:
         # 启动浏览器（cloakbrowser 自带 humanize 拟人化，调用方不要再叠加延迟）
         if proxyAddress:
@@ -56,3 +63,4 @@ def get_browser(fingerprint=None):
             sys.exit(1)
         else:
             traceback.print_exc()
+            raise

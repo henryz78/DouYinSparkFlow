@@ -55,6 +55,12 @@ class DeliveryStateTests(unittest.TestCase):
         delivery_state.save(state)
         self.assertEqual(len(delivery_state.load()["days"]), 30)
 
+    def test_today_timezone(self):
+        with patch.dict(os.environ, {"TZ": "Asia/Shanghai"}):
+            self.assertRegex(delivery_state.today(), r"^\d{4}-\d{2}-\d{2}$")
+        with patch.dict(os.environ, {"TZ": "UTC"}):
+            self.assertRegex(delivery_state.today(), r"^\d{4}-\d{2}-\d{2}$")
+
 
 if __name__ == "__main__":
     unittest.main()

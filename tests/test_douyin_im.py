@@ -169,7 +169,7 @@ class MatchTests(unittest.TestCase):
         self.item = {
             "remark": "甲同学", "nickname": "NickA", "douyin_id": "user_aaa",
             "uid": PEER_A, "sec_uid": self.sec,
-            "title": "甲同学", "display": "甲同学",
+            "title": "甲同学", "display": "甲同学", "is_group": False,
         }
 
     def test_remark_has_highest_priority(self):
@@ -200,17 +200,32 @@ class MatchTests(unittest.TestCase):
 
     def test_falls_back_to_dom_title_when_fiber_dead(self):
         dom_only = {"remark": None, "nickname": None, "douyin_id": "",
-                    "uid": None, "sec_uid": None, "title": "甲同学", "display": "甲同学"}
+                    "uid": None, "sec_uid": None, "title": "甲同学", "display": "甲同学",
+                    "is_group": False}
         _, how = self.s._match(dom_only, {_norm("甲同学"): "甲同学"})
         self.assertEqual(how, "title")
 
     def test_dom_title_with_nbsp_still_matches(self):
         nb = "甲\u00a0同\u00a0学"
         dom = {"remark": None, "nickname": None, "douyin_id": "",
-               "uid": "999", "sec_uid": "S9", "title": nb, "display": nb}
+               "uid": "999", "sec_uid": "S9", "title": nb, "display": nb,
+               "is_group": False}
         k, how = self.s._match(dom, {_norm("甲同学"): "甲同学"})
         self.assertEqual(how, "title")
         self.assertIsNotNone(k)
+
+    def test_group_is_never_matched(self):
+        group_item = dict(self.item, is_group=True)
+        k, how = self.s._match(group_item, {_norm("甲同学"): "甲同学"})
+        self.assertIsNone(k)
+        self.assertIsNone(how)
+
+    def test_undecidable_group_status_is_not_matched(self):
+        """conv_id 提取失败等原因导致 is_group 判不出来时，宁可漏扫也不能当单聊处理。"""
+        unknown_item = dict(self.item, is_group=None)
+        k, how = self.s._match(unknown_item, {_norm("甲同学"): "甲同学"})
+        self.assertIsNone(k)
+        self.assertIsNone(how)
 
 
 class JoinTests(unittest.TestCase):

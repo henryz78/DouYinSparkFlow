@@ -128,9 +128,10 @@ class TelegramNotifier:
             dict.fromkeys(str(target) for target in targets if str(target).strip())
         )
         method = "原生贴纸「续火花」" if delivery_mode == "native_sticker" else "文本消息"
+        title = "🔍【测试/探测模式】好友匹配测试完成（未发送消息）" if test_mode else "✅ 火花任务完成"
         text = "\n".join(
             [
-                "✅ 火花任务完成",
+                title,
                 "",
                 f"时间：{self._now()}（北京时间）",
                 f"账号：{_clean(username, 120)}",
@@ -148,7 +149,10 @@ class TelegramNotifier:
             dict.fromkeys(str(target) for target in targets if str(target).strip())
         )
         count = _success_count(reason)
-        header = "⚠️ 火花任务未完全完成" if count and count[0] else "❌ 火花任务失败"
+        if test_mode:
+            header = "🔍【测试/探测模式】好友匹配测试未完全通过" if count and count[0] else "🔍【测试/探测模式】好友匹配测试失败"
+        else:
+            header = "⚠️ 火花任务未完全完成" if count and count[0] else "❌ 火花任务失败"
         result = (
             f"{count[0]}/{count[1]} 已完成"
             if count
