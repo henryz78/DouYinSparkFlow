@@ -99,6 +99,21 @@ class EnvKeysTests(unittest.TestCase):
         cfg = models.Config.from_env_map({"CRON_RANDOM_WINDOW_SECONDS": "7200"})
         self.assertEqual(cfg.to_env_map()["CRON_RANDOM_WINDOW_SECONDS"], "7200")
 
+    def test_telegram_settings_survive_config_tool_roundtrip(self):
+        cfg = models.Config.from_env_map(
+            {
+                "TELEGRAM_ENABLED": "true",
+                "TELEGRAM_BOT_TOKEN": "bot-token",
+                "TELEGRAM_CHAT_ID": "chat-id",
+                "TELEGRAM_NOTIFY_FAILURE": "false",
+            }
+        )
+        env = cfg.to_env_map()
+        self.assertEqual(env["TELEGRAM_ENABLED"], "true")
+        self.assertEqual(env["TELEGRAM_BOT_TOKEN"], "bot-token")
+        self.assertEqual(env["TELEGRAM_CHAT_ID"], "chat-id")
+        self.assertEqual(env["TELEGRAM_NOTIFY_FAILURE"], "false")
+
 
 class DefaultsAlignmentTests(unittest.TestCase):
     """★ 四处默认值必须一致（2026-09-19 对齐过一轮）。

@@ -36,6 +36,12 @@ LOG_LEVEL_OPTIONS = ["Debug", "Info", "Warning", "Error"]
 DEFAULT_PROXY_ADDRESS = ""
 DEFAULT_RUN_TIME = "09:00:00"
 DEFAULT_CRON_RANDOM_WINDOW_SECONDS = 0
+DEFAULT_TELEGRAM_ENABLED = False
+DEFAULT_TELEGRAM_BOT_TOKEN = ""
+DEFAULT_TELEGRAM_CHAT_ID = ""
+DEFAULT_TELEGRAM_NOTIFY_SUCCESS = True
+DEFAULT_TELEGRAM_NOTIFY_FAILURE = True
+DEFAULT_TELEGRAM_NOTIFY_TEST = False
 DEFAULT_TZ = "Asia/Shanghai"
 DEFAULT_MESSAGE_TEMPLATE = "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]"
 DEFAULT_HITOKOTO_TYPES = ["文学", "影视", "诗词", "哲学"]
@@ -66,6 +72,12 @@ BASE_ENV_KEYS = [
     "CRON_MINUTE",
     "CRON_SECOND",
     "CRON_RANDOM_WINDOW_SECONDS",
+    "TELEGRAM_ENABLED",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "TELEGRAM_NOTIFY_SUCCESS",
+    "TELEGRAM_NOTIFY_FAILURE",
+    "TELEGRAM_NOTIFY_TEST",
     "TZ",
     "MESSAGE_TEMPLATE",
     "HITOKOTO_TYPES",
@@ -188,6 +200,12 @@ class Config:
     proxy_address: str = DEFAULT_PROXY_ADDRESS
     run_time: str = DEFAULT_RUN_TIME
     cron_random_window_seconds: int = DEFAULT_CRON_RANDOM_WINDOW_SECONDS
+    telegram_enabled: bool = DEFAULT_TELEGRAM_ENABLED
+    telegram_bot_token: str = DEFAULT_TELEGRAM_BOT_TOKEN
+    telegram_chat_id: str = DEFAULT_TELEGRAM_CHAT_ID
+    telegram_notify_success: bool = DEFAULT_TELEGRAM_NOTIFY_SUCCESS
+    telegram_notify_failure: bool = DEFAULT_TELEGRAM_NOTIFY_FAILURE
+    telegram_notify_test: bool = DEFAULT_TELEGRAM_NOTIFY_TEST
     tz: str = DEFAULT_TZ
     # 内存里保存真实换行，写盘时才转成字面 \n
     message_template: str = DEFAULT_MESSAGE_TEMPLATE
@@ -226,6 +244,12 @@ class Config:
             "CRON_RANDOM_WINDOW_SECONDS": str(
                 max(0, int(self.cron_random_window_seconds))
             ),
+            "TELEGRAM_ENABLED": str(self.telegram_enabled).lower(),
+            "TELEGRAM_BOT_TOKEN": self.telegram_bot_token or "",
+            "TELEGRAM_CHAT_ID": self.telegram_chat_id or "",
+            "TELEGRAM_NOTIFY_SUCCESS": str(self.telegram_notify_success).lower(),
+            "TELEGRAM_NOTIFY_FAILURE": str(self.telegram_notify_failure).lower(),
+            "TELEGRAM_NOTIFY_TEST": str(self.telegram_notify_test).lower(),
             "TZ": self.tz or DEFAULT_TZ,
             "MESSAGE_TEMPLATE": template,
             "HITOKOTO_TYPES": json.dumps(
@@ -270,6 +294,10 @@ class Config:
             except (TypeError, ValueError):
                 return default
             return max(low, min(high, value))
+
+        def flag(key: str, default: bool) -> bool:
+            value = text(key, str(default)).strip().lower()
+            return value in {"1", "true", "yes", "on"}
 
         accounts: list = []
         try:
@@ -319,6 +347,18 @@ class Config:
                 DEFAULT_CRON_RANDOM_WINDOW_SECONDS,
                 0,
                 86399,
+            ),
+            telegram_enabled=flag("TELEGRAM_ENABLED", DEFAULT_TELEGRAM_ENABLED),
+            telegram_bot_token=text("TELEGRAM_BOT_TOKEN"),
+            telegram_chat_id=text("TELEGRAM_CHAT_ID"),
+            telegram_notify_success=flag(
+                "TELEGRAM_NOTIFY_SUCCESS", DEFAULT_TELEGRAM_NOTIFY_SUCCESS
+            ),
+            telegram_notify_failure=flag(
+                "TELEGRAM_NOTIFY_FAILURE", DEFAULT_TELEGRAM_NOTIFY_FAILURE
+            ),
+            telegram_notify_test=flag(
+                "TELEGRAM_NOTIFY_TEST", DEFAULT_TELEGRAM_NOTIFY_TEST
             ),
             tz=text("TZ", DEFAULT_TZ) or DEFAULT_TZ,
             # 磁盘上是字面 \n，换回真实换行方便在文本框里编辑。

@@ -6,6 +6,13 @@ from utils.logger import setup_logger
 
 logger = setup_logger(level=logging.DEBUG)
 
+
+def _env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 """
 是否启用调试模式
 更详细的日志打印，浏览器操作可视化等
@@ -41,6 +48,13 @@ def get_config():
         "proxyAddress": os.getenv("PROXY_ADDRESS", ""),
         "deliveryMode": delivery_mode,
         "nativeStickerName": os.getenv("NATIVE_STICKER_NAME", "续火花").strip() or "续火花",
+        "telegramEnabled": _env_bool("TELEGRAM_ENABLED"),
+        "telegramBotToken": os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+        "telegramChatId": os.getenv("TELEGRAM_CHAT_ID", "").strip(),
+        "telegramNotifySuccess": _env_bool("TELEGRAM_NOTIFY_SUCCESS", True),
+        "telegramNotifyFailure": _env_bool("TELEGRAM_NOTIFY_FAILURE", True),
+        "telegramNotifyTest": _env_bool("TELEGRAM_NOTIFY_TEST"),
+        "timezone": os.getenv("TZ", "Asia/Shanghai").strip() or "Asia/Shanghai",
         "messageTemplate": os.getenv(
             "MESSAGE_TEMPLATE",
             "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n[API]",

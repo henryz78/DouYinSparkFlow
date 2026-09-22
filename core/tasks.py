@@ -7,6 +7,7 @@ from core.msg_builder import build_message
 from core.browser import get_browser
 from core.douyin_im import DouyinIM, STATUS_READY, norm
 from core import delivery_state
+from core.telegram_notify import TelegramNotifier
 
 
 config = get_config()
@@ -412,6 +413,8 @@ def runTasks(selection_only=False, sticker_probe=False):
         else ""
     )
     logger.info("开始执行任务" + mode_note)
+    notifier = TelegramNotifier(config, logger)
+    test_mode = selection_only or sticker_probe
     logger.debug(f"当前配置如下：")
     logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
     logger.debug(f"一言类型: {config['hitokotoTypes']}")
@@ -430,6 +433,7 @@ def runTasks(selection_only=False, sticker_probe=False):
         fingerprint = user.get("fingerprint", None)
         logger.info(f"开始处理账号 {username}")
         # 创建任务
+        browser = None
         try:
             browser = get_browser(fingerprint)
             do_user_task(
@@ -443,7 +447,24 @@ def runTasks(selection_only=False, sticker_probe=False):
                 selection_only=selection_only,
                 sticker_probe=sticker_probe,
             )
+        except Exception as exc:
+            notifier.notify_failure(
+                username,
+                targets,
+                str(exc),
+                delivery_mode=config.get("deliveryMode", "text"),
+                test_mode=test_mode,
+            )
+            raise
+        else:
+            notifier.notify_success(
+                username,
+                targets,
+                delivery_mode=config.get("deliveryMode", "text"),
+                test_mode=test_mode,
+            )
             logger.info(f"账号 {username} 任务完成")
         finally:
             # 关闭浏览器实例
-            browser.close()
+            if browser is not None:
+                browser.close()
