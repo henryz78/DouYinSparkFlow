@@ -133,10 +133,52 @@ class StickerProbeTests(unittest.TestCase):
         result = probe.send_native_sticker(
             {"conv_id": "conv:Ken", "display": "Ken"},
             {"item": item},
+            wait_receipt=False,
         )
 
         self.assertTrue(result["ok"])
         self.assertEqual(item.calls, ["click"])
+
+    def test_native_sticker_waits_for_same_http_dom_receipt_as_text(self):
+        """贴纸发送复用文字那套 HTTP/DOM 回执监听，不再是发了就当成功的桩。"""
+        class Mon:
+            def __init__(self):
+                self.sends = []
+
+        class Item:
+            def __init__(self, mon):
+                self.mon = mon
+
+            def dispatch_event(self, _event):
+                # 模拟点击触发网络请求，监听器随后把回执塞进 mon.sends。
+                self.mon.sends.append(
+                    {"ok": True, "code": 0, "status": "OK", "message_id": "123456"}
+                )
+
+        class MsgState:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self):
+                self.calls += 1
+                if self.calls == 1:
+                    return {"count": 0, "lastFromMe": False, "lastText": ""}
+                return {"count": 1, "lastFromMe": True, "lastText": "🔥"}
+
+        probe = object.__new__(DouyinIM)
+        probe._current_conv = lambda: {"convId": "conv:Ken"}
+        probe.mon = Mon()
+        probe._msg_state = MsgState()
+        probe.page = _Page()
+
+        result = probe.send_native_sticker(
+            {"conv_id": "conv:Ken", "display": "Ken"},
+            {"item": Item(probe.mon)},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "http+dom")
+        self.assertEqual(result["message_id"], "123456")
 
 
 class StickerDeliveryOnceTests(unittest.TestCase):
@@ -262,6 +304,87 @@ class StickerDeliveryOnceTests(unittest.TestCase):
 
         self.assertEqual(IM.prepares, 1)
         self.assertEqual(IM.dispatches, 1)
+
+    def test_http_confirmed_sticker_skips_persistence_check(self):
+        """HTTP 回执确认成功时直接放行，不强求开新页面复核也能通过（真实案例：
+        Ken 收到了贴纸，但复核没扫到，这条测试防止同类回归）。"""
+        class Page:
+            def wait_for_timeout(self, _ms):
+                pass
+
+        class Context:
+            def set_default_navigation_timeout(self, _timeout):
+                pass
+
+            def set_default_timeout(self, _timeout):
+                pass
+
+            def new_page(self):
+                return Page()
+
+            def add_cookies(self, _cookies):
+                pass
+
+            def close(self):
+                pass
+
+        class Browser:
+            def new_context(self):
+                return Context()
+
+        class IM:
+            def __init__(self, *_args, **_kwargs):
+                self.last_scan = {"stopped": "caller-break", "select_failed": []}
+
+            def wait_ready(self):
+                return {"status": tasks.STATUS_READY, "user_id": "account"}
+
+            def iter_find_and_select(self, targets):
+                for target in targets:
+                    yield {"display": target, "conv_id": f"conv:{target}"}
+
+            def _current_conv(self):
+                return {"convId": "conv:Ken"}
+
+            def prepare_native_sticker(self, _name):
+                return {
+                    "name": "续火花",
+                    "resource_key": "sticker-key",
+                    "item": object(),
+                    "snapshot": {"matching_ids": ["old-id"], "matching_count": 1},
+                }
+
+            def send_native_sticker(self, _hit, _prepared):
+                return {
+                    "ok": True,
+                    "via": "http+dom",
+                    "message_id": "123456",
+                    "code": 0,
+                    "status": "OK",
+                }
+
+            def fold_groups(self):
+                return {}
+
+            def detach(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as tempdir, patch.dict(
+            os.environ,
+            {"SEND_STATE_FILE": str(Path(tempdir) / "send_state.json")},
+        ), patch.object(tasks, "DouyinIM", IM), patch.object(
+            tasks,
+            "_verify_sticker_persisted",
+            side_effect=AssertionError("http 已确认时不该再开新页面复核"),
+        ), patch.object(
+            tasks,
+            "config",
+            {**tasks.config, "deliveryMode": "native_sticker", "nativeStickerName": "续火花"},
+        ):
+            tasks.do_user_task(Browser(), "account", [], ["Ken"])
+            record = tasks.delivery_state.get("account", "ken")
+            self.assertEqual(record["status"], "confirmed")
+            self.assertTrue(record["receipt_ok"])
 
 
 if __name__ == "__main__":

@@ -1987,7 +1987,7 @@ class DouyinIM:
             "matching_count": int(snapshot.get("matching_count", 0) or 0),
         }
 
-    def send_native_sticker(self, hit, prepared):
+    def send_native_sticker(self, hit, prepared, wait_receipt=True, timeout=20.0):
         """Dispatch one exact sticker click after rechecking the conversation."""
         want = (hit or {}).get("conv_id")
         current = self._current_conv()
@@ -1999,6 +1999,11 @@ class DouyinIM:
         item = (prepared or {}).get("item")
         if item is None:
             raise RuntimeError("原生贴纸项已失效，已阻止发送")
+
+        if wait_receipt:
+            sends_before = len(self.mon.sends)
+            msg_before = self._msg_state()
+
         # The sticker's own React click handler is the direct send action;
         # dispatch exactly one click on that element, never a separate send-button click.
         item.dispatch_event("click")
@@ -2009,9 +2014,29 @@ class DouyinIM:
             )
         except Exception:
             pass
+
+        if not wait_receipt:
+            return {"ok": True, "via": "sticker", "conv_id": want,
+                    "display": (hit or {}).get("display")}
+
+        # 复用文字发送同一套 HTTP/DOM 双回执监听：mon.sends 本来就记录了所有
+        # 发送响应（不分文字/贴纸），贴纸没有正文，传空字符串跳过 DOM 侧的
+        # 文本前缀比对，只留「消息数+1 且来自本人」这一条件。
+        rc = self._wait_receipt(sends_before, msg_before, "", timeout)
+        if rc["http"]:
+            h = rc["http"]
+            (logger.info if h["ok"] else logger.warning)(
+                f"[SEND] {'✅' if h['ok'] else '❌'} 贴纸 HTTP 回执 code={h['code']} "
+                f'status="{h["status"]}" message_id={h["message_id"] or "-"}')
+        if not rc["ok"]:
+            logger.warning(f"[SEND] ⚠️ {timeout:.0f}s 内没拿到贴纸回执（可能走 WS 通道，或发送被拦）")
         return {
-            "ok": True,
-            "via": "sticker",
+            "ok": rc["ok"],
+            "via": ("http+dom" if rc["http"] and rc["dom"] else
+                    "http" if rc["http"] else "dom" if rc["dom"] else None),
+            "message_id": (rc["http"] or {}).get("message_id"),
+            "code": (rc["http"] or {}).get("code"),
+            "status": (rc["http"] or {}).get("status"),
             "conv_id": want,
             "display": (hit or {}).get("display"),
         }

@@ -299,8 +299,9 @@ def do_user_task(
                 }
                 delivery_state.put(account_key, target_key, record, day=task_day)
 
+                r = None
                 try:
-                    im.send_native_sticker(friend, prepared)
+                    r = im.send_native_sticker(friend, prepared)
                 except Exception as exc:
                     record["dispatch_error"] = str(exc)
                     delivery_state.put(account_key, target_key, record, day=task_day)
@@ -309,9 +310,16 @@ def do_user_task(
                         "已进入 at-most-once 保护，不会自动重发"
                     )
 
-                if _verify_sticker_persisted(context, account_key, record, config, logger):
+                http_confirmed = bool(
+                    r
+                    and r.get("ok")
+                    and r.get("via") in ("http", "http+dom")
+                    and r.get("message_id")
+                )
+                if http_confirmed or _verify_sticker_persisted(context, account_key, record, config, logger):
                     record["status"] = "confirmed"
                     record["confirmed_at"] = time.time()
+                    record["receipt_ok"] = bool(r and r.get("ok"))
                     delivery_state.put(account_key, target_key, record, day=task_day)
                     sent_ok += 1
                     logger.info(
