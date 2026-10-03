@@ -4,6 +4,7 @@ from utils.config import get_config, get_userData
 from core.msg_builder import build_message
 from core.browser import get_browser
 from core.douyin_im import DouyinIM, STATUS_READY, norm
+from core.telegram_notify import notify_account
 
 
 config = get_config()
@@ -13,6 +14,7 @@ logger = setup_logger(level=config.get("logLevel", "Info"))
 
 def do_user_task(browser, username, cookies, targets):
     """一个账号的完整流程：门禁 → 滚动找人 → 发送 → 回执确认。
+    返回 (发送成功数, 问题列表)，用来发 Telegram 总结；问题列表为空才算完全成功。
 
     实现委托给 `core.douyin_im.DouyinIM`：
       任务一（门禁）    DouyinIM 构造时自动完成，结论在 wait_ready() 里
@@ -63,7 +65,7 @@ def do_user_task(browser, username, cookies, targets):
                 "ERROR": "内部错误",
             }.get(res.get("status"), res.get("status"))
             logger.error(f"账号 {username} 操作前检查未通过：{reason}，跳过该账号")
-            return
+            return 0, [f"操作前检查未通过：{reason}"]
 
         logger.info(
             f"账号 {username} 门禁通过  user_id={res.get('user_id')} "
@@ -71,6 +73,7 @@ def do_user_task(browser, username, cookies, targets):
         )
 
         sent_ok = sent_fail = 0
+        failed = []
 
         # 生成器：yield 出来的那一刻，对应好友的会话已经被选中
         for friend in im.iter_find_and_select(targets):
@@ -85,6 +88,7 @@ def do_user_task(browser, username, cookies, targets):
                 )
             else:
                 sent_fail += 1
+                failed.append(friend["display"])
                 # 重试一次：用 conv_id 重新选中（列表可能已滚动，原来的下标失效）
                 logger.warning(
                     f"账号 {username} → {friend['display']} 未拿到回执，重试一次"
@@ -95,6 +99,7 @@ def do_user_task(browser, username, cookies, targets):
                         if r2["ok"]:
                             sent_ok += 1
                             sent_fail -= 1
+                            failed.pop()
                             logger.info(
                                 f"账号 {username} → {friend['display']} 重试成功"
                             )
@@ -120,12 +125,21 @@ def do_user_task(browser, username, cookies, targets):
                 f"账号 {username} 找到但选中失败：{scan['select_failed']}"
             )
 
+        problems = []
+        if failed:
+            problems.append(f"发送失败：{'、'.join(failed)}")
+        if scan.get("missing"):
+            problems.append(f"未找到：{'、'.join(map(str, scan['missing']))}")
+        if scan.get("select_failed"):
+            problems.append(f"选中失败：{'、'.join(map(str, scan['select_failed']))}")
+
         folds = im.fold_groups()
         if any(v for v in folds.values() if v):
             logger.warning(
                 f"账号 {username} 注意：折叠组/陌生人组里有内容 {folds}，"
                 f"主列表扫不到，目标可能被折叠"
             )
+        return sent_ok, problems
     finally:
         if im is not None:
             try:
@@ -153,14 +167,19 @@ def runTasks():
         # 两边都归过才谈得上相等 —— 否则配置里的「Ｌｕ瞳」永远匹配不上页面上的「Lu瞳」。
         # 同时丢掉归一后变空的项：空串留在剩余名单里永远扣不掉，会白滚到底。
         targets = [t for t in map(norm, user["targets"]) if t]
+        shown = [t for t in user["targets"] if norm(t)]  # 通知里显示配置里的原名，不显示归一化后的小写
         username = user.get("username", "未知用户")
         fingerprint = user.get("fingerprint", None)
         logger.info(f"开始处理账号 {username}")
         # 创建任务
         try:
             browser = get_browser(fingerprint)
-            do_user_task(browser, username, cookies, targets)
+            sent_ok, problems = do_user_task(browser, username, cookies, targets)
             logger.info(f"账号 {username} 任务完成")
+            notify_account(config, logger, username, shown, sent_ok, problems)
+        except Exception as exc:
+            notify_account(config, logger, username, shown, None, [f"{type(exc).__name__}: {exc}"[:300]])
+            raise
         finally:
             # 关闭浏览器实例
             browser.close()
