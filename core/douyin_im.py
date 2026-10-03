@@ -1708,11 +1708,10 @@ class DouyinIM:
             self.page.mouse.down()
             self.page.mouse.up()
         elif mode == "jsclick":
-            self.page.evaluate(
-                "(i) => { const e = document.querySelectorAll('[data-e2e=\"conversation-item\"]')[i];"
-                " if(e){ e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));"
-                " e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));"
-                " e.dispatchEvent(new MouseEvent('click',{bubbles:true})); } }", index)
+            # 对已滚动到位的 el 派发；按下标重查会在滚动重渲染后点到别的会话
+            el.evaluate(
+                "e => { for (const t of ['mousedown', 'mouseup', 'click'])"
+                " e.dispatchEvent(new MouseEvent(t, {bubbles: true})); }")
         elif mode == "cdp":
             cdp = self.page.context.new_cdp_session(self.page)
             try:
