@@ -34,6 +34,8 @@ from configTool.conversation_dialog import ConversationDialog
 from configTool.login_dialog import LoginDialog
 from configTool.models import (
     BROWSER_ACTION_TIMEOUT_RANGE,
+    CRON_RANDOM_WINDOW_RANGE,
+    DELIVERY_MODE_OPTIONS,
     FRIEND_LIST_WAIT_RANGE,
     HITOKOTO_OPTIONS,
     IM_MAX_STEPS_RANGE,
@@ -396,10 +398,33 @@ class ConfigApp:
             side="left", padx=(8, 0)
         )
 
+        label("随机延迟窗口", "秒，0 = 不随机；到点后再随机等 0~N 秒才开始（例：8:00 + 7200 = 08:00~10:00 随机）")
+        self.var_random_window = tk.IntVar()
+        ttk.Spinbox(
+            form,
+            from_=CRON_RANDOM_WINDOW_RANGE[0],
+            to=CRON_RANDOM_WINDOW_RANGE[1],
+            increment=600,
+            textvariable=self.var_random_window,
+            font=FONT_UI,
+        ).pack(fill="x")
+
         label("时区")
         self.var_tz = tk.StringVar()
         ttk.Combobox(form, textvariable=self.var_tz, values=TZ_OPTIONS, font=FONT_UI).pack(fill="x")
         self.var_tz.trace_add("write", self._on_field_changed)
+
+        label("发送方式", "text = 文本消息；native_sticker = 抖音原生贴纸（点表情面板里的贴纸，不发文字）")
+        self.var_delivery = tk.StringVar()
+        ttk.Combobox(
+            form, textvariable=self.var_delivery, values=DELIVERY_MODE_OPTIONS, font=FONT_UI
+        ).pack(fill="x")
+        self.var_delivery.trace_add("write", self._on_field_changed)
+
+        label("原生贴纸名称", "仅 native_sticker 模式用，对应表情面板里贴纸下方的文字")
+        self.var_sticker_name = tk.StringVar()
+        ttk.Entry(form, textvariable=self.var_sticker_name, font=FONT_UI).pack(fill="x")
+        self.var_sticker_name.trace_add("write", self._on_field_changed)
 
         label("消息模板", "用回车换行即可，写入 .env 时会自动转成 \\n（core/tasks.py 按 \\n 拆分发送）")
         self.template_text = tk.Text(form, height=5, wrap="word", font=FONT_UI, relief="solid", borderwidth=1)
@@ -494,7 +519,35 @@ class ConfigApp:
         ).pack(fill="x")
         self.var_log_level.trace_add("write", self._on_field_changed)
 
+        label("Telegram 通知", "每个账号跑完发一条总结；通知失败不影响任务结果")
+        self.var_tg_enabled = tk.BooleanVar()
+        ttk.Checkbutton(
+            form, text="启用 Telegram 通知", variable=self.var_tg_enabled,
+            command=self._on_field_changed,
+        ).pack(anchor="w")
+        label("Bot Token")
+        self.var_tg_token = tk.StringVar()
+        ttk.Entry(form, textvariable=self.var_tg_token, font=FONT_UI, show="•").pack(fill="x")
+        label("Chat ID")
+        self.var_tg_chat = tk.StringVar()
+        ttk.Entry(form, textvariable=self.var_tg_chat, font=FONT_UI).pack(fill="x")
+        tg_switches = ttk.Frame(form)
+        tg_switches.pack(fill="x", pady=(6, 0))
+        self.var_tg_success = tk.BooleanVar()
+        self.var_tg_failure = tk.BooleanVar()
+        ttk.Checkbutton(
+            tg_switches, text="成功时通知", variable=self.var_tg_success,
+            command=self._on_field_changed,
+        ).pack(side="left", padx=(0, 14))
+        ttk.Checkbutton(
+            tg_switches, text="失败时通知", variable=self.var_tg_failure,
+            command=self._on_field_changed,
+        ).pack(side="left")
+
         for var in (
+            self.var_random_window,
+            self.var_tg_token,
+            self.var_tg_chat,
             self.var_proxy,
             self.var_hour,
             self.var_minute,
@@ -763,6 +816,14 @@ class ConfigApp:
         self.var_max_steps.set(int(config.im_max_steps))
         self.var_retry.set(int(config.task_retry_times))
         self.var_log_level.set(config.log_level)
+        self.var_random_window.set(int(config.cron_random_window_seconds))
+        self.var_delivery.set(config.delivery_mode)
+        self.var_sticker_name.set(config.native_sticker_name)
+        self.var_tg_enabled.set(bool(config.telegram_enabled))
+        self.var_tg_token.set(config.telegram_bot_token)
+        self.var_tg_chat.set(config.telegram_chat_id)
+        self.var_tg_success.set(bool(config.telegram_notify_success))
+        self.var_tg_failure.set(bool(config.telegram_notify_failure))
 
         self._refresh_account_tree(select=self._current_index)
         self._syncing = False
@@ -804,6 +865,16 @@ class ConfigApp:
             self.var_retry, config.task_retry_times, *RETRY_TIMES_RANGE
         )
         config.log_level = self.var_log_level.get().strip() or "Info"
+        config.cron_random_window_seconds = self._safe_int(
+            self.var_random_window, config.cron_random_window_seconds, *CRON_RANDOM_WINDOW_RANGE
+        )
+        config.delivery_mode = self.var_delivery.get().strip().lower() or "text"
+        config.native_sticker_name = self.var_sticker_name.get().strip()
+        config.telegram_enabled = bool(self.var_tg_enabled.get())
+        config.telegram_bot_token = self.var_tg_token.get().strip()
+        config.telegram_chat_id = self.var_tg_chat.get().strip()
+        config.telegram_notify_success = bool(self.var_tg_success.get())
+        config.telegram_notify_failure = bool(self.var_tg_failure.get())
 
     @staticmethod
     def _safe_int(var: tk.IntVar, fallback: int, low: int, high: int) -> int:

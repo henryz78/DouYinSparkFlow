@@ -175,6 +175,31 @@ class DefaultsAlignmentTests(unittest.TestCase):
             with self.subTest(key=env_key):
                 self._check(env_key, attr)
 
+    def test_delivery_and_sticker_aligned(self):
+        self._check("DELIVERY_MODE", "DELIVERY_MODE")
+        self._check("NATIVE_STICKER_NAME", "NATIVE_STICKER_NAME")
+
+    def test_cron_random_window_aligned(self):
+        """CRON_RANDOM_WINDOW_SECONDS 由 shell 脚本读取，config.py 里没有，只对齐另外三处。"""
+        three = {
+            "configTool": str(self.ct["CRON_RANDOM_WINDOW_SECONDS"]),
+            ".env.example": self.env["CRON_RANDOM_WINDOW_SECONDS"],
+            "docs": self.js["CRON_RANDOM_WINDOW_SECONDS"],
+        }
+        self.assertEqual(len(set(three.values())), 1, f"三处默认值不一致: {three}")
+
+    def test_telegram_defaults_aligned(self):
+        """布尔值写法不同（False / false），按语义比。"""
+        for key, attr in [
+            ("TELEGRAM_ENABLED", "TELEGRAM_ENABLED"),
+            ("TELEGRAM_NOTIFY_SUCCESS", "TELEGRAM_NOTIFY_SUCCESS"),
+            ("TELEGRAM_NOTIFY_FAILURE", "TELEGRAM_NOTIFY_FAILURE"),
+        ]:
+            with self.subTest(key=key):
+                want = str(self.ct[attr]).lower()
+                self.assertEqual(self.env[key], want, f"{key} 与 .env.example 不一致")
+                self.assertEqual(self.js[key], want, f"{key} 与 docs/main.js 不一致")
+
     def test_log_level_matches_dropdown_option(self):
         """★ 默认日志级别必须**逐字**等于下拉框里的选项。
 
@@ -193,6 +218,40 @@ class DefaultsAlignmentTests(unittest.TestCase):
         options = self.re.findall(r'value:\s*"(\w+)"', js)
         self.assertIn(self.js["LOG_LEVEL"], options,
                       f"{self.js['LOG_LEVEL']!r} 不在网页版选项 {options} 里")
+
+
+class NewKeysRoundTripTests(unittest.TestCase):
+    """发送方式 / Telegram / 随机窗口：落盘再读回必须一致，且不合法值回落到默认。"""
+
+    def test_roundtrip(self):
+        cfg = models.Config.from_env_map({})
+        cfg.delivery_mode = "native_sticker"
+        cfg.native_sticker_name = "续火花"
+        cfg.cron_random_window_seconds = 7200
+        cfg.telegram_enabled = True
+        cfg.telegram_bot_token = "tok"
+        cfg.telegram_chat_id = "123"
+        cfg.telegram_notify_success = False
+        back = models.Config.from_env_map(cfg.to_env_map())
+        self.assertEqual(back.delivery_mode, "native_sticker")
+        self.assertEqual(back.cron_random_window_seconds, 7200)
+        self.assertTrue(back.telegram_enabled)
+        self.assertEqual((back.telegram_bot_token, back.telegram_chat_id), ("tok", "123"))
+        self.assertFalse(back.telegram_notify_success)
+        self.assertTrue(back.telegram_notify_failure)
+
+    def test_bad_values_fall_back(self):
+        back = models.Config.from_env_map({"CRON_RANDOM_WINDOW_SECONDS": "abc", "TELEGRAM_ENABLED": ""})
+        self.assertEqual(back.cron_random_window_seconds, 0)
+        self.assertFalse(back.telegram_enabled)
+
+    def test_validate_flags_bad_delivery_and_incomplete_telegram(self):
+        cfg = models.Config.from_env_map({})
+        cfg.delivery_mode = "bogus"
+        cfg.telegram_enabled = True
+        texts = " ".join(msg for _, msg in models.validate(cfg))
+        self.assertIn("发送方式只能是", texts)
+        self.assertIn("Telegram", texts)
 
 
 if __name__ == "__main__":

@@ -160,6 +160,10 @@
                                     <el-time-picker v-model="form.RUN_TIME" format="HH:mm:ss" value-format="HH:mm:ss"
                                         placeholder="09:00:00" />
                                 </el-form-item>
+                                <el-form-item label="随机延迟窗口（秒，0=不随机）">
+                                    <el-input-number v-model="form.CRON_RANDOM_WINDOW_SECONDS" :step="600"
+                                        :precision="0" :min="0" :max="86400" />
+                                </el-form-item>
                                 <el-form-item label="时区">
                                     <el-select v-model="form.TZ" placeholder="Asia/Shanghai">
                                         <el-option label="Asia/Shanghai" value="Asia/Shanghai" />
@@ -167,6 +171,15 @@
                                         <el-option label="Asia/Tokyo" value="Asia/Tokyo" />
                                         <el-option label="UTC" value="UTC" />
                                     </el-select>
+                                </el-form-item>
+                                <el-form-item label="发送方式">
+                                    <el-select v-model="form.DELIVERY_MODE">
+                                        <el-option label="文本消息（text）" value="text" />
+                                        <el-option label="原生贴纸（native_sticker）" value="native_sticker" />
+                                    </el-select>
+                                </el-form-item>
+                                <el-form-item label="原生贴纸名称">
+                                    <el-input v-model="form.NATIVE_STICKER_NAME" />
                                 </el-form-item>
                                 <el-form-item label="消息模板">
                                     <el-input v-model="form.MESSAGE_TEMPLATE" :rows="4" type="textarea" />
@@ -212,6 +225,21 @@
                                 </el-form-item>
                                 <el-form-item label="输出日志级别">
                                     <el-select v-model="form.LOG_LEVEL" :options="log_level_options" />
+                                </el-form-item>
+                                <el-form-item label="Telegram 通知">
+                                    <el-switch v-model="form.TELEGRAM_ENABLED" />
+                                </el-form-item>
+                                <el-form-item label="Bot Token">
+                                    <el-input v-model="form.TELEGRAM_BOT_TOKEN" show-password />
+                                </el-form-item>
+                                <el-form-item label="Chat ID">
+                                    <el-input v-model="form.TELEGRAM_CHAT_ID" />
+                                </el-form-item>
+                                <el-form-item label="成功时通知">
+                                    <el-switch v-model="form.TELEGRAM_NOTIFY_SUCCESS" />
+                                </el-form-item>
+                                <el-form-item label="失败时通知">
+                                    <el-switch v-model="form.TELEGRAM_NOTIFY_FAILURE" />
                                 </el-form-item>
                             </el-form>
                         </div>

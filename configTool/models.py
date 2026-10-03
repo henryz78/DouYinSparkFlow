@@ -25,6 +25,8 @@ HITOKOTO_OPTIONS = [
     "其他",
 ]
 
+DELIVERY_MODE_OPTIONS = ["text", "native_sticker"]
+
 TZ_OPTIONS = ["Asia/Shanghai", "Asia/Hong_Kong", "Asia/Tokyo", "UTC"]
 
 # utils/logger.py::resolve_log_level 会做 lower() 映射，所以这里保持页面的写法
@@ -36,6 +38,12 @@ LOG_LEVEL_OPTIONS = ["Debug", "Info", "Warning", "Error"]
 DEFAULT_PROXY_ADDRESS = ""
 DEFAULT_RUN_TIME = "09:00:00"
 DEFAULT_TZ = "Asia/Shanghai"
+DEFAULT_CRON_RANDOM_WINDOW_SECONDS = 0
+DEFAULT_DELIVERY_MODE = "text"
+DEFAULT_NATIVE_STICKER_NAME = "续火花"
+DEFAULT_TELEGRAM_ENABLED = False
+DEFAULT_TELEGRAM_NOTIFY_SUCCESS = True
+DEFAULT_TELEGRAM_NOTIFY_FAILURE = True
 DEFAULT_MESSAGE_TEMPLATE = "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]"
 DEFAULT_HITOKOTO_TYPES = ["文学", "影视", "诗词", "哲学"]
 DEFAULT_BROWSER_ACTION_TIMEOUT = 120
@@ -57,6 +65,7 @@ IM_READY_TIMEOUT_RANGE = (5, 300)
 FRIEND_LIST_WAIT_RANGE = (1, 120)
 IM_MAX_STEPS_RANGE = (10, 2000)
 RETRY_TIMES_RANGE = (1, 5)
+CRON_RANDOM_WINDOW_RANGE = (0, 86400)
 
 # 写进 .env 的键顺序：先基础变量，再按账户顺序追加 COOKIES_*
 BASE_ENV_KEYS = [
@@ -64,7 +73,10 @@ BASE_ENV_KEYS = [
     "CRON_HOUR",
     "CRON_MINUTE",
     "CRON_SECOND",
+    "CRON_RANDOM_WINDOW_SECONDS",
     "TZ",
+    "DELIVERY_MODE",
+    "NATIVE_STICKER_NAME",
     "MESSAGE_TEMPLATE",
     "HITOKOTO_TYPES",
     "BROWSER_ACTION_TIMEOUT",
@@ -74,6 +86,11 @@ BASE_ENV_KEYS = [
     "IM_MAX_STEPS",
     "TASK_RETRY_TIMES",
     "LOG_LEVEL",
+    "TELEGRAM_ENABLED",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "TELEGRAM_NOTIFY_SUCCESS",
+    "TELEGRAM_NOTIFY_FAILURE",
     "TASKS",
 ]
 
@@ -186,6 +203,9 @@ class Config:
     proxy_address: str = DEFAULT_PROXY_ADDRESS
     run_time: str = DEFAULT_RUN_TIME
     tz: str = DEFAULT_TZ
+    cron_random_window_seconds: int = DEFAULT_CRON_RANDOM_WINDOW_SECONDS
+    delivery_mode: str = DEFAULT_DELIVERY_MODE
+    native_sticker_name: str = DEFAULT_NATIVE_STICKER_NAME
     # 内存里保存真实换行，写盘时才转成字面 \n
     message_template: str = DEFAULT_MESSAGE_TEMPLATE
     hitokoto_types: list = field(default_factory=lambda: list(DEFAULT_HITOKOTO_TYPES))
@@ -196,6 +216,11 @@ class Config:
     im_max_steps: int = DEFAULT_IM_MAX_STEPS
     task_retry_times: int = DEFAULT_TASK_RETRY_TIMES
     log_level: str = DEFAULT_LOG_LEVEL
+    telegram_enabled: bool = DEFAULT_TELEGRAM_ENABLED
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_notify_success: bool = DEFAULT_TELEGRAM_NOTIFY_SUCCESS
+    telegram_notify_failure: bool = DEFAULT_TELEGRAM_NOTIFY_FAILURE
     accounts: list = field(default_factory=list)
 
     # -- 序列化 -------------------------------------------------------------
@@ -220,7 +245,10 @@ class Config:
             "CRON_HOUR": hour,
             "CRON_MINUTE": minute,
             "CRON_SECOND": second,
+            "CRON_RANDOM_WINDOW_SECONDS": str(int(self.cron_random_window_seconds)),
             "TZ": self.tz or DEFAULT_TZ,
+            "DELIVERY_MODE": self.delivery_mode or DEFAULT_DELIVERY_MODE,
+            "NATIVE_STICKER_NAME": self.native_sticker_name or DEFAULT_NATIVE_STICKER_NAME,
             "MESSAGE_TEMPLATE": template,
             "HITOKOTO_TYPES": json.dumps(
                 self.hitokoto_types or [], ensure_ascii=False, separators=(",", ":")
@@ -232,6 +260,11 @@ class Config:
             "IM_MAX_STEPS": str(int(self.im_max_steps)),
             "TASK_RETRY_TIMES": str(int(self.task_retry_times)),
             "LOG_LEVEL": self.log_level or DEFAULT_LOG_LEVEL,
+            "TELEGRAM_ENABLED": str(bool(self.telegram_enabled)).lower(),
+            "TELEGRAM_BOT_TOKEN": self.telegram_bot_token or "",
+            "TELEGRAM_CHAT_ID": self.telegram_chat_id or "",
+            "TELEGRAM_NOTIFY_SUCCESS": str(bool(self.telegram_notify_success)).lower(),
+            "TELEGRAM_NOTIFY_FAILURE": str(bool(self.telegram_notify_failure)).lower(),
             # TASKS 不走 unicode_escape，保持中文可读（与 index.html / .env.example 一致）
             "TASKS": json.dumps(
                 [account.to_task() for account in self.accounts],
@@ -264,6 +297,12 @@ class Config:
             except (TypeError, ValueError):
                 return default
             return max(low, min(high, value))
+
+        def flag(key: str, default: bool) -> bool:
+            value = mapping.get(key)
+            if value is None or not str(value).strip():
+                return default
+            return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
         accounts: list = []
         try:
@@ -309,6 +348,14 @@ class Config:
             proxy_address=text("PROXY_ADDRESS"),
             run_time=run_time,
             tz=text("TZ", DEFAULT_TZ) or DEFAULT_TZ,
+            cron_random_window_seconds=number(
+                "CRON_RANDOM_WINDOW_SECONDS", DEFAULT_CRON_RANDOM_WINDOW_SECONDS,
+                *CRON_RANDOM_WINDOW_RANGE
+            ),
+            delivery_mode=text("DELIVERY_MODE", DEFAULT_DELIVERY_MODE).strip().lower()
+            or DEFAULT_DELIVERY_MODE,
+            native_sticker_name=text("NATIVE_STICKER_NAME", DEFAULT_NATIVE_STICKER_NAME).strip()
+            or DEFAULT_NATIVE_STICKER_NAME,
             # 磁盘上是字面 \n，换回真实换行方便在文本框里编辑。
             # 字面 \r\n 先收成字面 \n 再解 —— 但注意 `.replace("\\n","\n")` 对
             # 字面 \r\n **匹配不到**（\r\n 里没有字面 \n），所以是那条 `\\r\\n` 规则
@@ -338,6 +385,11 @@ class Config:
                 "TASK_RETRY_TIMES", DEFAULT_TASK_RETRY_TIMES, *RETRY_TIMES_RANGE
             ),
             log_level=text("LOG_LEVEL", DEFAULT_LOG_LEVEL) or DEFAULT_LOG_LEVEL,
+            telegram_enabled=flag("TELEGRAM_ENABLED", DEFAULT_TELEGRAM_ENABLED),
+            telegram_bot_token=text("TELEGRAM_BOT_TOKEN").strip(),
+            telegram_chat_id=text("TELEGRAM_CHAT_ID").strip(),
+            telegram_notify_success=flag("TELEGRAM_NOTIFY_SUCCESS", DEFAULT_TELEGRAM_NOTIFY_SUCCESS),
+            telegram_notify_failure=flag("TELEGRAM_NOTIFY_FAILURE", DEFAULT_TELEGRAM_NOTIFY_FAILURE),
             accounts=accounts,
         )
 
@@ -360,6 +412,14 @@ def validate(config: Config) -> list:
         issues.append(("错误", "消息模板不能为空"))
     if not config.hitokoto_types:
         issues.append(("警告", "一言类型一个都没勾选，[API] 可能拿不到内容"))
+    if config.delivery_mode not in DELIVERY_MODE_OPTIONS:
+        issues.append(("错误", f"发送方式只能是 {' / '.join(DELIVERY_MODE_OPTIONS)}，当前是「{config.delivery_mode}」"))
+    if config.delivery_mode == "native_sticker" and not config.native_sticker_name.strip():
+        issues.append(("错误", "发送方式为原生贴纸时，贴纸名称不能为空"))
+    if config.telegram_enabled and not (
+        config.telegram_bot_token.strip() and config.telegram_chat_id.strip()
+    ):
+        issues.append(("警告", "已开启 Telegram 通知，但 Bot Token 或 Chat ID 为空，运行时不会发出通知"))
     if not config.accounts:
         issues.append(("错误", "至少要有一个账户"))
 

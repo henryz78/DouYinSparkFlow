@@ -30,7 +30,10 @@ const app = createApp({
     const form = reactive({
       PROXY_ADDRESS: "",
       RUN_TIME: "09:00:00",
+      CRON_RANDOM_WINDOW_SECONDS: 0,
       TZ: "Asia/Shanghai",
+      DELIVERY_MODE: "text",
+      NATIVE_STICKER_NAME: "续火花",
       MESSAGE_TEMPLATE:
         "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]",
       HITOKOTO_TYPES: ["文学", "影视", "诗词", "哲学"],
@@ -41,6 +44,11 @@ const app = createApp({
       IM_MAX_STEPS: 200,
       TASK_RETRY_TIMES: 3,
       LOG_LEVEL: "Debug",
+      TELEGRAM_ENABLED: false,
+      TELEGRAM_BOT_TOKEN: "",
+      TELEGRAM_CHAT_ID: "",
+      TELEGRAM_NOTIFY_SUCCESS: true,
+      TELEGRAM_NOTIFY_FAILURE: true,
       ACCOUNTS: [
         {
           username: "user1",
@@ -60,7 +68,10 @@ const app = createApp({
         CRON_HOUR,
         CRON_MINUTE,
         CRON_SECOND,
+        CRON_RANDOM_WINDOW_SECONDS: form.CRON_RANDOM_WINDOW_SECONDS,
         TZ: form.TZ,
+        DELIVERY_MODE: form.DELIVERY_MODE,
+        NATIVE_STICKER_NAME: form.NATIVE_STICKER_NAME,
         MESSAGE_TEMPLATE: form.MESSAGE_TEMPLATE,
         HITOKOTO_TYPES: form.HITOKOTO_TYPES,
         BROWSER_ACTION_TIMEOUT: form.BROWSER_ACTION_TIMEOUT,
@@ -70,6 +81,12 @@ const app = createApp({
         IM_MAX_STEPS: form.IM_MAX_STEPS,
         TASK_RETRY_TIMES: form.TASK_RETRY_TIMES,
         LOG_LEVEL: form.LOG_LEVEL,
+        // 布尔值转成字符串：复制逻辑只处理 object / number / string
+        TELEGRAM_ENABLED: String(form.TELEGRAM_ENABLED),
+        TELEGRAM_BOT_TOKEN: form.TELEGRAM_BOT_TOKEN,
+        TELEGRAM_CHAT_ID: form.TELEGRAM_CHAT_ID,
+        TELEGRAM_NOTIFY_SUCCESS: String(form.TELEGRAM_NOTIFY_SUCCESS),
+        TELEGRAM_NOTIFY_FAILURE: String(form.TELEGRAM_NOTIFY_FAILURE),
         TASKS: form.ACCOUNTS.map((account) => ({
           username: account.username,
           unique_id: account.unique_id,
