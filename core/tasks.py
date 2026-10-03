@@ -33,6 +33,13 @@ def do_user_task(browser, username, cookies, targets):
     # 注入 Cookie
     context.add_cookies(cookies)
 
+    sticker_mode = config["deliveryMode"] == "native_sticker"
+
+    def send(friend, message):
+        if sticker_mode:
+            return im.send_native_sticker(friend, config["nativeStickerName"])
+        return im.type_and_send(friend, message)
+
     im = None
     try:
         # 打开抖音网页聊天页面由库内部完成（先挂钩子再导航，顺序不可颠倒）
@@ -68,8 +75,8 @@ def do_user_task(browser, username, cookies, targets):
         # 生成器：yield 出来的那一刻，对应好友的会话已经被选中
         for friend in im.iter_find_and_select(targets):
             logger.debug(f"账号 {username} 已选中好友 {friend['display']}，准备发送")
-            message = build_message()
-            r = im.type_and_send(friend, message)
+            message = None if sticker_mode else build_message()
+            r = send(friend, message)
             if r["ok"]:
                 sent_ok += 1
                 logger.info(
@@ -84,7 +91,7 @@ def do_user_task(browser, username, cookies, targets):
                 )
                 try:
                     if friend.get("reselect") and friend["reselect"]():
-                        r2 = im.type_and_send(friend, message)
+                        r2 = send(friend, message)
                         if r2["ok"]:
                             sent_ok += 1
                             sent_fail -= 1

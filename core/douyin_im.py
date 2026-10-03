@@ -81,6 +81,10 @@ SEL_MSG_ITEM = '[data-e2e="msg-item-content"]'
 SEL_MSG_FROM_ME = ".MessageBoxContentisFromMe"
 SEL_SEND_BTN = ".messageMsgInputpublishBtn"
 SEL_SEND_BTN_READY = ".messageMsgInputpublishBtn.messageMsgInputpublishRedBtn"  # 有内容可发
+SEL_STICKER_BUTTON = "svg.messageMsgInputiconAction"  # 表情/贴纸面板开关
+SEL_STICKER_PANEL = ".componentsemojiemojiPanel"
+SEL_STICKER_ITEM = ".emojiEmojiItememojiItem"
+SEL_STICKER_DESC = ".emojiEmojiItememojiItemDesc"
 
 # 输入框：优先 contenteditable 本体（humanize 的"可编辑"检查能过），容器兜底
 EDITOR_CANDIDATES = (
@@ -102,6 +106,29 @@ JS_LOGIN_DOM = """(() => ({
 }))()"""
 
 # 列表"可以开始滚了"（≠ 列表已全量加载）。标题非空、头像已加载、容器有高度。
+# 贴纸项状态 / 点击：按描述文字精确匹配，查找与点击在同一次 evaluate 里完成，
+# 避免面板重渲染后 locator 指到别的贴纸。点贴纸图片区域本身即发送。
+JS_STICKER_ACTION = """({raw, fire}) => {
+  const hit = [...document.querySelectorAll('.emojiEmojiItememojiItem')].filter(it => {
+    const d = it.querySelector('.emojiEmojiItememojiItemDesc');
+    return d && d.textContent.trim() === raw;
+  });
+  if (hit.length !== 1) return {n: hit.length};
+  const box = hit[0].querySelector('.emojiEmojiItemimgBox');
+  const img = hit[0].querySelector('img');
+  if (!box || !img) return {n: 1, loaded: false};
+  const loading = box.querySelector('.emojiEmojiItemloading');
+  const st = loading ? getComputedStyle(loading) : null;
+  const blocked = !!st && st.pointerEvents !== 'none' && st.visibility !== 'hidden'
+    && st.display !== 'none' && Number(st.opacity || 1) > 0;
+  const loaded = img.complete && img.naturalWidth > 0;
+  if (fire && loaded && !blocked) {
+    box.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, composed: true}));
+    return {n: 1, loaded, blocked, fired: true};
+  }
+  return {n: 1, loaded, blocked, fired: false};
+}"""
+
 JS_LIST_READY = """(() => {
   const items = document.querySelectorAll('[data-e2e="conversation-item"]');
   if (items.length === 0) return { ready: false, why: 'no-item', count: 0 };
@@ -1886,6 +1913,82 @@ class DouyinIM:
             "code": (rc["http"] or {}).get("code"),
             "status": (rc["http"] or {}).get("status"),
             "conv_id": hit.get("conv_id"),
+            "display": hit.get("display"),
+        }
+
+    def send_native_sticker(self, hit, sticker_name="续火花", wait_receipt=True, timeout=20.0):
+        """给「已选中」的会话发一张原生贴纸（点贴纸本身即发送，不再点发送键）。
+
+        返回结构与 type_and_send 一致。
+        """
+        if not hit:
+            raise ValueError("hit is None")
+        name = norm(sticker_name)
+        if not name:
+            raise ValueError("sticker_name is empty")
+        want = hit.get("conv_id")
+
+        panel = self.page.locator(SEL_STICKER_PANEL).first
+        if not (panel.count() and panel.is_visible()):
+            button = self.page.locator(SEL_STICKER_BUTTON).first
+            if button.count() == 0 or not button.is_visible():
+                raise RuntimeError("未找到可见的抖音表情按钮")
+            button.dispatch_event("click")
+            panel.wait_for(state="visible", timeout=min(self.ready_timeout, 10) * 1000)
+
+        raw = None
+        items = panel.locator(SEL_STICKER_ITEM)
+        for i in range(items.count()):
+            desc = items.nth(i).locator(SEL_STICKER_DESC).first
+            if desc.count() and norm(desc.inner_text()) == name:
+                raw = desc.inner_text().strip()
+                break
+        if raw is None:
+            raise RuntimeError(f"在抖音表情面板中找不到原生贴纸: {name}")
+
+        # 贴纸图片首次加载受 CDN 缓存影响，实测可超过 20s，留 60s 上限
+        deadline = time.monotonic() + min(self.ready_timeout, 60)
+        while True:
+            st = self.page.evaluate(JS_STICKER_ACTION, {"raw": raw, "fire": False})
+            if st.get("n") != 1:
+                raise RuntimeError(f"贴纸 {name} 匹配到 {st.get('n')} 个，已阻止发送")
+            if st.get("loaded") and not st.get("blocked"):
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"贴纸 {name} 图片仍在加载，已阻止发送")
+            self.page.wait_for_timeout(200)
+
+        cur = self._current_conv()
+        if not want or not cur or cur.get("convId") != want:
+            raise RuntimeError(
+                f"贴纸发送前会话校验失败：目标={want or '-'} 当前={(cur or {}).get('convId') or '-'}"
+            )
+
+        sends_before = len(self.mon.sends)
+        msg_before = self._msg_state()
+        if not self.page.evaluate(JS_STICKER_ACTION, {"raw": raw, "fire": True}).get("fired"):
+            raise RuntimeError(f"贴纸 {name} 点击未触发")
+
+        if not wait_receipt:
+            return {"ok": True, "via": "sticker", "conv_id": want, "display": hit.get("display")}
+
+        # 贴纸没有正文，text 传空串跳过 DOM 侧前缀比对，只看「消息数+1 且来自本人」
+        rc = self._wait_receipt(sends_before, msg_before, "", timeout)
+        if rc["http"]:
+            h = rc["http"]
+            (logger.info if h["ok"] else logger.warning)(
+                f"[SEND] {'✅' if h['ok'] else '❌'} 贴纸 HTTP 回执 code={h['code']} "
+                f'status="{h["status"]}" message_id={h["message_id"] or "-"}')
+        if not rc["ok"]:
+            logger.warning(f"[SEND] ⚠️ {timeout:.0f}s 内没拿到贴纸回执")
+        return {
+            "ok": rc["ok"],
+            "via": ("http+dom" if rc["http"] and rc["dom"] else
+                    "http" if rc["http"] else "dom" if rc["dom"] else None),
+            "message_id": (rc["http"] or {}).get("message_id"),
+            "code": (rc["http"] or {}).get("code"),
+            "status": (rc["http"] or {}).get("status"),
+            "conv_id": want,
             "display": hit.get("display"),
         }
 
