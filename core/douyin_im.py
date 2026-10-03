@@ -122,7 +122,7 @@ JS_STICKER_ACTION = """({raw, fire}) => {
   const blocked = !!st && st.pointerEvents !== 'none' && st.visibility !== 'hidden'
     && st.display !== 'none' && Number(st.opacity || 1) > 0;
   const loaded = img.complete && img.naturalWidth > 0;
-  if (fire && loaded && !blocked) {
+  if (fire && !blocked) {
     box.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, composed: true}));
     return {n: 1, loaded, blocked, fired: true};
   }
@@ -1946,8 +1946,9 @@ class DouyinIM:
         if raw is None:
             raise RuntimeError(f"在抖音表情面板中找不到原生贴纸: {name}")
 
-        # 贴纸图片首次加载受 CDN 缓存影响，实测可超过 20s，留 60s 上限
-        deadline = time.monotonic() + min(self.ready_timeout, 60)
+        # 图片 CDN 对境外出口只有少数节点可达，连到坏节点会卡很久（实测可超 120s）。
+        # 点击只依赖条目本身，图片没加载不影响发送；等 10s 仍未加载就直接点，仅遮罩挡住时才拒绝
+        deadline = time.monotonic() + min(self.ready_timeout, 10)
         while True:
             st = self.page.evaluate(JS_STICKER_ACTION, {"raw": raw, "fire": False})
             if st.get("n") != 1:
@@ -1955,7 +1956,10 @@ class DouyinIM:
             if st.get("loaded") and not st.get("blocked"):
                 break
             if time.monotonic() >= deadline:
-                raise RuntimeError(f"贴纸 {name} 图片仍在加载，已阻止发送")
+                if st.get("blocked"):
+                    raise RuntimeError(f"贴纸 {name} 仍被加载遮罩挡住，已阻止发送")
+                logger.warning(f"[STICKER] 图片 10s 未加载，不影响发送，直接点击")
+                break
             self.page.wait_for_timeout(200)
 
         cur = self._current_conv()
