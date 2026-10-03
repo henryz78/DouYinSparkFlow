@@ -111,8 +111,7 @@ JS_LIST_READY = """(() => {
     if (!t || !t.textContent.trim()) blank++;
   });
   if (blank > 0) return { ready: false, why: 'title-blank', blank, count: items.length };
-  const img = items[0].querySelector('img');
-  if (img && !img.complete) return { ready: false, why: 'avatar-loading', count: items.length };
+  // 头像是装饰资源，CDN 图片可能长期 complete=false，不能作为就绪门禁（会卡满超时）
   const box = document.querySelector('.conversationConversationListwrapper');
   if (!box || box.clientHeight <= 0) return { ready: false, why: 'no-container', count: items.length };
   return { ready: true, count: items.length };
