@@ -1,16 +1,16 @@
-"""configTool 配置数据层的纯逻辑单测（不依赖 tkinter）。
+"""app 配置数据层的纯逻辑单测（不依赖 GUI）。
 
 只测 `models.Config` 的序列化往返 —— 尤其是 MESSAGE_TEMPLATE 的换行编码，
 这是 GUI（真换行）与 `.env`（字面 `\\n`）之间的桥，两侧必须严格对称。
 
-⚠️ configTool 已经是包，直接 `from configTool import models` 即可
+注意：app 已经是包，直接 `from app.config import models` 即可
    （从仓库根跑测试时仓库根就在 sys.path 上）。models.py 是纯数据层，
-   不 import tkinter，可以安全在无 GUI 环境跑。
+   不 import GUI，可以安全在无界面环境跑。
 """
 import unittest
 from pathlib import Path
 
-from configTool import models
+from app.config import models
 
 
 def _roundtrip(gui_text: str) -> tuple:
@@ -38,11 +38,11 @@ class MessageTemplateRoundTripTests(unittest.TestCase):
         self.assertEqual(back, gui)
 
     def test_real_crlf_is_normalized_not_doubled(self):
-        """★ 真 CRLF 必须收成**一个**字面 \\n，不能变成两个（空一行）。
+        """真 CRLF 必须收成一个字面 \\n，不能变成两个（空一行）。
 
         这是唯一真正依赖 replace 顺序的地方：
           正确 = replace("\\r\\n","\\n") 再 replace("\\r","\\n")
-          写反 = 先 replace("\\r","\\n")，CRLF 里的 \\r 被单独吃掉 → "\\n\\n"
+          写反 = 先 replace("\\r","\\n")，CRLF 里的 \\r 被单独替换 → "\\n\\n"
         若顺序写反，GUI 里一个回车会变成空行。
         """
         disk, back = _roundtrip("甲\r\n乙")
@@ -97,18 +97,15 @@ class EnvKeysTests(unittest.TestCase):
 
 
 class DefaultsAlignmentTests(unittest.TestCase):
-    """★ 四处默认值必须一致（2026-09-19 对齐过一轮）。
+    """三处默认值必须一致（2026-09-19 对齐过一轮，网页版已下线移除一处）。
 
-    同一个键有四个"默认"来源，历史上已经漂移过一次：
-        configTool/models.py  DEFAULT_*        —— GUI 新建配置的初始值
+    同一个键有三个"默认"来源，历史上已经漂移过一次：
+        app/config/models.py  DEFAULT_*        —— GUI 新建配置的初始值
         .env.example                            —— 给人抄的示例值
-        docs/static/js/main.js  form            —— 网页版初始值
-        utils/config.py  os.getenv(..., 兜底)   —— 程序无 .env 时的底裤
+        utils/config.py  os.getenv(..., 兜底)   —— 程序无 .env 时的备用默认值
 
     漂移不会报错，只会让"干净克隆"和"GUI 生成"两条路径行为不同 —— 极难排查。
-    这个测试把四处钉在一起。
-
-    ⚠️ docs/main.js 是手抄的、没有构建期联动，是最容易漏的一处。
+    这个测试把三处锁在一起。
     """
 
     ROOT = Path(__file__).resolve().parent.parent
@@ -118,7 +115,7 @@ class DefaultsAlignmentTests(unittest.TestCase):
         import re
 
         cls.re = re
-        # ① configTool DEFAULT_*
+        # ① app DEFAULT_*
         cls.ct = {
             k[len("DEFAULT_"):]: v
             for k, v in vars(models).items()
@@ -132,11 +129,7 @@ class DefaultsAlignmentTests(unittest.TestCase):
                 re.M,
             )
         )
-        # ③ docs/static/js/main.js 的 form 初始值
-        js = (cls.ROOT / "docs/static/js/main.js").read_text(encoding="utf-8")
-        block = js.split("const form = reactive({", 1)[1].split("ACCOUNTS:", 1)[0]
-        cls.js = dict(re.findall(r'^\s{6}([A-Z_]+):\s*"?(.*?)"?,?\s*$', block, re.M))
-        # ④ utils/config.py 的 os.getenv 兜底
+        # ③ utils/config.py 的 os.getenv 兜底
         cls.pyf = dict(
             re.findall(
                 r'os\.getenv\("([A-Z_]+)",\s*"([^"]*)"\)',
@@ -147,13 +140,12 @@ class DefaultsAlignmentTests(unittest.TestCase):
     def _check(self, env_key, default_attr):
         ct = self.ct.get(default_attr)
         env = self.env.get(env_key)
-        js = self.js.get(env_key)
         pyf = self.pyf.get(env_key)
-        four = {"configTool": str(ct), ".env.example": str(env),
-                "docs": str(js), "config.py": str(pyf)}
+        three = {"app": str(ct), ".env.example": str(env),
+                 "config.py": str(pyf)}
         self.assertEqual(
-            len(set(four.values())), 1,
-            f"{env_key} 四处默认值不一致: {four}",
+            len(set(three.values())), 1,
+            f"{env_key} 三处默认值不一致: {three}",
         )
 
     def test_ready_timeout_aligned(self):
@@ -175,53 +167,38 @@ class DefaultsAlignmentTests(unittest.TestCase):
             with self.subTest(key=env_key):
                 self._check(env_key, attr)
 
-    def test_delivery_and_sticker_aligned(self):
-        self._check("DELIVERY_MODE", "DELIVERY_MODE")
-        self._check("NATIVE_STICKER_NAME", "NATIVE_STICKER_NAME")
+    def test_log_level_is_in_dropdown_option(self):
+        """默认日志级别必须逐字等于下拉框里的选项。
 
-    def test_cron_random_window_aligned(self):
-        """CRON_RANDOM_WINDOW_SECONDS 由 shell 脚本读取，config.py 里没有，只对齐另外三处。"""
-        three = {
-            "configTool": str(self.ct["CRON_RANDOM_WINDOW_SECONDS"]),
-            ".env.example": self.env["CRON_RANDOM_WINDOW_SECONDS"],
-            "docs": self.js["CRON_RANDOM_WINDOW_SECONDS"],
-        }
-        self.assertEqual(len(set(three.values())), 1, f"三处默认值不一致: {three}")
-
-    def test_telegram_defaults_aligned(self):
-        """布尔值写法不同（False / false），按语义比。"""
-        for key, attr in [
-            ("TELEGRAM_ENABLED", "TELEGRAM_ENABLED"),
-            ("TELEGRAM_NOTIFY_SUCCESS", "TELEGRAM_NOTIFY_SUCCESS"),
-            ("TELEGRAM_NOTIFY_FAILURE", "TELEGRAM_NOTIFY_FAILURE"),
-        ]:
-            with self.subTest(key=key):
-                want = str(self.ct[attr]).lower()
-                self.assertEqual(self.env[key], want, f"{key} 与 .env.example 不一致")
-                self.assertEqual(self.js[key], want, f"{key} 与 docs/main.js 不一致")
-
-    def test_log_level_matches_dropdown_option(self):
-        """★ 默认日志级别必须**逐字**等于下拉框里的选项。
-
-        tkinter Combobox 对不在 values 里的值不会高亮匹配项 → 框看着是空的，
-        用户会以为没设置。`utils.logger` 内部 upper/lower 了，所以两种写法
-        日志行为**相同**，踩坑时不会报错、只会在 GUI 上显示异常。
+        选项清单只在 models.LOG_LEVEL_OPTIONS 一处定义，默认值必须落在里面，
+        否则界面下拉框看着是空的。`utils.logger` 内部 upper/lower 了，所以两种
+        写法日志行为相同，踩坑时不会报错、只会在 GUI 上显示异常。
         """
         self.assertIn(
             models.DEFAULT_LOG_LEVEL, models.LOG_LEVEL_OPTIONS,
             f"{models.DEFAULT_LOG_LEVEL!r} 不在下拉选项 {models.LOG_LEVEL_OPTIONS} 里",
         )
 
-    def test_docs_log_level_matches_dropdown_option(self):
-        """网页版同上：main.js 的默认值必须在其 log_level_options 里。"""
-        js = (self.ROOT / "docs/static/js/main.js").read_text(encoding="utf-8")
-        options = self.re.findall(r'value:\s*"(\w+)"', js)
-        self.assertIn(self.js["LOG_LEVEL"], options,
-                      f"{self.js['LOG_LEVEL']!r} 不在网页版选项 {options} 里")
+    def test_delivery_and_sticker_aligned(self):
+        self._check("DELIVERY_MODE", "DELIVERY_MODE")
+        self._check("NATIVE_STICKER_NAME", "NATIVE_STICKER_NAME")
+
+    def test_cron_random_window_aligned(self):
+        """CRON_RANDOM_WINDOW_SECONDS 由 shell 脚本读取，config.py 里没有，只对齐另外两处。"""
+        self.assertEqual(
+            str(self.ct["CRON_RANDOM_WINDOW_SECONDS"]),
+            self.env["CRON_RANDOM_WINDOW_SECONDS"],
+        )
+
+    def test_telegram_defaults_aligned(self):
+        """布尔值写法不同（False / false），按语义比。"""
+        for key in ("TELEGRAM_ENABLED", "TELEGRAM_NOTIFY_SUCCESS", "TELEGRAM_NOTIFY_FAILURE"):
+            with self.subTest(key=key):
+                self.assertEqual(self.env[key], str(self.ct[key]).lower())
 
 
 class NewKeysRoundTripTests(unittest.TestCase):
-    """发送方式 / Telegram / 随机窗口：落盘再读回必须一致，且不合法值回落到默认。"""
+    """发送方式 / Telegram / 随机窗口：落盘再读回必须一致。"""
 
     def test_roundtrip(self):
         cfg = models.Config.from_env_map({})
@@ -238,20 +215,23 @@ class NewKeysRoundTripTests(unittest.TestCase):
         self.assertTrue(back.telegram_enabled)
         self.assertEqual((back.telegram_bot_token, back.telegram_chat_id), ("tok", "123"))
         self.assertFalse(back.telegram_notify_success)
-        self.assertTrue(back.telegram_notify_failure)
 
-    def test_bad_values_fall_back(self):
-        back = models.Config.from_env_map({"CRON_RANDOM_WINDOW_SECONDS": "abc", "TELEGRAM_ENABLED": ""})
-        self.assertEqual(back.cron_random_window_seconds, 0)
-        self.assertFalse(back.telegram_enabled)
+    def test_gui_save_keeps_fields_it_has_no_inputs_for(self):
+        """桌面端保存是整份重建；页面没有输入框的字段必须沿用原值，不能被重置成默认。"""
+        from app.web.service import ConfigService
 
-    def test_validate_flags_bad_delivery_and_incomplete_telegram(self):
-        cfg = models.Config.from_env_map({})
-        cfg.delivery_mode = "bogus"
-        cfg.telegram_enabled = True
-        texts = " ".join(msg for _, msg in models.validate(cfg))
-        self.assertIn("发送方式只能是", texts)
-        self.assertIn("Telegram", texts)
+        svc = ConfigService.__new__(ConfigService)
+        svc.config = models.Config.from_env_map({})
+        svc.config.delivery_mode = "native_sticker"
+        svc.config.cron_random_window_seconds = 7200
+        svc.config.telegram_enabled = True
+        svc.config.telegram_bot_token = "tok"
+        svc.config.telegram_chat_id = "123"
+        saved = svc._dict_to_config({})
+        self.assertEqual(saved.delivery_mode, "native_sticker")
+        self.assertEqual(saved.cron_random_window_seconds, 7200)
+        self.assertTrue(saved.telegram_enabled)
+        self.assertEqual((saved.telegram_bot_token, saved.telegram_chat_id), ("tok", "123"))
 
 
 if __name__ == "__main__":

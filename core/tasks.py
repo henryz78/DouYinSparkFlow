@@ -1,10 +1,11 @@
 import traceback
+from datetime import datetime
+
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
 from core.msg_builder import build_message
 from core.browser import get_browser
 from core.douyin_im import DouyinIM, STATUS_READY, norm
-from datetime import datetime
 from core.telegram_notify import method_label, notify_account
 from core.run_log import record_run
 
@@ -34,7 +35,6 @@ def do_user_task(browser, username, cookies, targets):
 
     page = context.new_page()
 
-    # 注入 Cookie
     context.add_cookies(cookies)
 
     sticker_mode = config["deliveryMode"] == "native_sticker"
@@ -58,7 +58,7 @@ def do_user_task(browser, username, cookies, targets):
 
         res = im.wait_ready()
         if res.get("status") != STATUS_READY:
-            # 终端态都要显式打印，方便从日志一眼看出是哪种失败
+            # 终端态都要显式打印，方便从日志分辨是哪种失败
             reason = {
                 "LOGGED_OUT": "未登录（没有 sessionid）",
                 "EXPIRED": "登录已失效（有 sessionid 但服务端不认）",
@@ -157,12 +157,16 @@ def do_user_task(browser, username, cookies, targets):
                 im.detach()
             except Exception:
                 pass
-        context.close()  # 任务完成后关闭上下文
+        context.close()
 
 
 def runTasks():
-    # 检查是否启用多任务和任务数量
-    # 创建信号量以限制并发任务数量
+    """跑一轮所有账号的任务。
+
+    返回进程退出码：任一账号门禁失败或抛异常 → 1，否则 0。
+    「部分好友没找到 / 发送失败」不计入整体失败（可能只是改名），只记日志。
+    调度器靠这个退出码判断「今天是否算成功执行」。
+    """
     logger.info("开始执行任务")
     logger.debug(f"当前配置如下：")
     logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
@@ -172,11 +176,13 @@ def runTasks():
             f"用户: {user.get('username', '未知用户')}, 目标好友: {user['targets']}"
         )
 
+    failed = 0
+    results: list = []
     for user in userData:
         cookies = user["cookies"]
-        # 归一化在**这里**做（配置读取端不做）：DouyinIM._match 内部用同一套 norm，
-        # 两边都归过才谈得上相等 —— 否则配置里的「Ｌｕ瞳」永远匹配不上页面上的「Lu瞳」。
-        # 同时丢掉归一后变空的项：空串留在剩余名单里永远扣不掉，会白滚到底。
+        # 归一化只在这里做（配置读取端不做）：DouyinIM._match 内部也用同一套 norm，
+        # 两边都归过才谈得上相等，否则配置里的「Ｌｕ瞳」永远匹配不上页面上的「Lu瞳」。
+        # 同时丢掉归一后变空的项：空串留在剩余名单里扣不掉，会一直空转到底。
         targets = [t for t in map(norm, user["targets"]) if t]
         shown = [t for t in user["targets"] if norm(t)]  # 通知里显示配置里的原名，不显示归一化后的小写
         username = user.get("username", "未知用户")
@@ -184,19 +190,80 @@ def runTasks():
         logger.info(f"开始处理账号 {username}")
         started = datetime.now().astimezone()
         canon = {norm(t): t for t in shown}  # 运行记录里好友名还原成配置里的原名
+        browser = None
         try:
             browser = get_browser(fingerprint)
             sent_ok, problems, friends = do_user_task(browser, username, cookies, targets)
             logger.info(f"账号 {username} 任务完成")
-            notified = notify_account(config, logger, username, shown, sent_ok, problems)
-            friends = [{"name": canon.get(norm(f["name"]), f["name"]), "status": f["status"]} for f in friends]
-            record_run(logger, username, shown, sent_ok, problems, started, friends, notified, method_label(config))
         except Exception as exc:
-            err = [f"{type(exc).__name__}: {exc}"[:300]]
-            notified = notify_account(config, logger, username, shown, None, err)
-            record_run(logger, username, shown, None, err, started, [], notified, method_label(config))
-            raise
+            logger.error(f"账号 {username} 任务异常：\n{traceback.format_exc()}")
+            sent_ok, problems, friends = None, [f"{type(exc).__name__}: {exc}"[:300]], []
         finally:
-            # 关闭浏览器实例
-            browser.close()
-    
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception:
+                    logger.warning(traceback.format_exc())
+        friends = [{"name": canon.get(norm(f["name"]), f["name"]), "status": f["status"]} for f in friends]
+        notified = notify_account(config, logger, username, shown, sent_ok, problems)
+        record_run(logger, username, shown, sent_ok, problems, started, friends, notified, method_label(config))
+        # 一个账号出错不拖累后面的账号；整体失败 = 异常，或一条都没发出去（含门禁未通过）
+        ok = sent_ok is not None and (sent_ok > 0 or not problems)
+        if not ok:
+            failed += 1
+        results.append((username, {
+            "ok": ok,
+            "reason": "；".join(problems),
+            "sent_ok": sent_ok or 0,
+            "sent_fail": sum(f["status"] in ("failed", "select_failed") for f in friends),
+            "missing": [f["name"] for f in friends if f["status"] == "missing"],
+        }))
+
+    _notify_summary(results, failed)
+
+    if failed:
+        logger.error(f"本轮共有 {failed} 个账号失败")
+        return 1
+    return 0
+
+
+def _notify_summary(results: list, failed: int) -> None:
+    """把本轮结果拼成文本，推送到用户配置的通知渠道。
+
+    通知失败只记日志，绝不影响任务退出码 —— 调度器判断「今天是否成功」
+    只看任务本身的结果。
+    """
+    notifications = config.get("notifications") or []
+    if not notifications:
+        return
+
+    total_ok = sum(int(r.get("sent_ok") or 0) for _, r in results)
+    total_fail = sum(int(r.get("sent_fail") or 0) for _, r in results)
+
+    lines = [f"抖音火花续期 · {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
+    for username, r in results:
+        if r.get("ok"):
+            line = f"✅ {username}：发送成功 {int(r.get('sent_ok') or 0)}"
+            if r.get("sent_fail"):
+                line += f"，失败 {int(r['sent_fail'])}"
+        else:
+            line = f"❌ {username}：{r.get('reason') or '任务失败'}"
+        lines.append(line)
+        if r.get("missing"):
+            lines.append(f"　未找到：{'、'.join(str(x) for x in r['missing'])}")
+    lines.append("————————————")
+    lines.append(
+        f"本轮：{len(results) - failed}/{len(results)} 个账号成功，"
+        f"共发送 {total_ok} 条，失败 {total_fail} 条"
+    )
+
+    try:
+        from core import notify
+
+        for label, ok, message in notify.send_all(notifications, "\n".join(lines)):
+            if ok:
+                logger.info(f"通知已发送：{label}")
+            else:
+                logger.warning(f"通知发送失败：{label} - {message}")
+    except Exception:
+        logger.warning(f"通知发送异常：\n{traceback.format_exc()}")
