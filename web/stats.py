@@ -74,12 +74,10 @@ def last_per_day(rows):
 def health(rows):
     """从最近一次运行推断的健康状态；没有记录则全是 unknown。"""
     if not rows:
-        return {"login": "unknown", "telegram": "unknown"}
+        return {"login": "unknown"}
     latest = last_per_day(rows)[max(last_per_day(rows))]
-    notified = [r.get("notified") for r in latest]
     return {
         "login": "bad" if any("登录" in p for r in latest for p in r["problems"]) else "ok",
-        "telegram": "failed" if False in notified else "ok" if True in notified else "off",
     }
 
 

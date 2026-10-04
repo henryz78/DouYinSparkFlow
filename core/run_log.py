@@ -6,9 +6,9 @@ from pathlib import Path
 RUNS_FILE = Path(__file__).resolve().parent.parent / "logs" / "runs.jsonl"
 
 
-def record_run(logger, username, targets, sent_ok, problems, started, friends=(), notified=None, method=""):
+def record_run(logger, username, targets, sent_ok, problems, started, friends=(), method=""):
     """尽力而为：写失败只告警，绝不影响任务结果。sent_ok=None 表示中途异常。
-    friends=[{name,status}] 逐人结果；notified=Telegram 是否送达（None=没发）。"""
+    friends=[{name,status}] 逐人结果。"""
     if sent_ok is None:
         status = "error"
     elif not problems:
@@ -26,7 +26,6 @@ def record_run(logger, username, targets, sent_ok, problems, started, friends=()
         "target_names": list(targets),
         "problems": problems,
         "friends": list(friends),
-        "notified": notified,
         "method": method,
     }
     try:

@@ -25,11 +25,10 @@ function rowHtml(r) {
     <span class="state ${r.status}">${STATUS[r.status] || r.status}</span></li>`;
 }
 
-const NOTIFY = { true: "已送达", false: "未送达", null: "未发送" };
 const FSTATE = { ok: "已发送", failed: "失败", missing: "未找到", select_failed: "选中失败", waiting: "等待" };
 const span = (a, b) => { const s = Math.max(0, Math.round((new Date(b) - new Date(a)) / 1000)); return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`; };
 
-// 记录页的详细版：信息量对齐 Telegram 通知（账号、方式、目标好友、结果、问题）
+// 记录页的详细版：账号、方式、目标好友、结果、问题
 function detailHtml(r) {
   const friends = (r.friends && r.friends.length ? r.friends : (r.target_names || []).map((name) => ({ name, status: "" })))
     .map((f) => `<li>${esc(f.name)}${f.status ? `<span class="state ${f.status}">${FSTATE[f.status] || f.status}</span>` : ""}</li>`).join("");
@@ -37,7 +36,7 @@ function detailHtml(r) {
   return `<li class="rec">
     <div class="rec-head"><span class="when">${md(r.start)} <small>${hm(r.start)} – ${hm(r.end)} · 耗时 ${span(r.start, r.end)}</small></span>
       <span class="state ${r.status}">${STATUS[r.status] || r.status}</span></div>
-    <div class="kv">${kv("账号", esc(r.account))}${kv("方式", esc(r.method || ""))}${kv("结果", `${r.sent} / ${r.targets} 已发送`)}${kv("Telegram", NOTIFY[r.notified])}</div>
+    <div class="kv">${kv("账号", esc(r.account))}${kv("方式", esc(r.method || ""))}${kv("结果", `${r.sent} / ${r.targets} 已发送`)}</div>
     ${friends ? `<div><p class="eyebrow">目标好友</p><ul class="friends">${friends}</ul></div>` : ""}
     ${r.problems.length ? `<div class="problem"><p class="eyebrow alert">问题</p><p>${esc(r.problems.join("；"))}</p></div>` : ""}
   </li>`;
@@ -100,7 +99,6 @@ async function loadOverview() {
   const h = s.health, dot = (cls, t) => `<span class="state ${cls}">${t}</span>`;
   $("health").innerHTML = [
     ["登录状态", { ok: dot("ok", "正常"), bad: dot("failed", "已失效，需要重新登录"), unknown: "暂无记录" }[h.login]],
-    ["Telegram 通知", { ok: dot("ok", "上次已送达"), failed: dot("failed", "上次未送达"), off: "上次未发送", unknown: "暂无记录" }[h.telegram]],
     ["容器已运行", duration(h.uptime)],
     ["版本", esc(h.version || "–")],
   ].map(([k, v]) => `<div><p class="eyebrow">${k}</p><p>${v}</p></div>`).join("");
@@ -141,7 +139,7 @@ chips("log-filter", (f) => { logFilter = f; drawLogs(); });
 
 // ---- 配置页：字段由后端 /api/config 描述，这里只负责渲染和提交变更的部分 ----
 let cfgLoaded = null;
-const GROUPS = { time: "发送时间", content: "发送内容", telegram: "Telegram 通知" };
+const GROUPS = { time: "发送时间", content: "发送内容" };
 const ENUM = { text: "文本消息", native_sticker: "原生贴纸" };
 const attr = (s) => esc(s).replace(/'/g, "&#39;");
 
@@ -169,7 +167,6 @@ async function loadConfig() {
       ${time.slice(3).map(fieldHtml).join("")}</fieldset>
     <fieldset><legend>${GROUPS.content}</legend>${by("content").map(fieldHtml).join("")}</fieldset>
     <fieldset><legend>好友名单</legend>${c.accounts.map((a) => `<div class="field acct"><label for="acct-${a.id}">${esc(a.name)}（每行一位好友）</label><textarea class="input" id="acct-${a.id}" rows="${Math.max(3, a.targets.length + 1)}">${esc(a.targets.join("\n"))}</textarea><p class="small error" data-err="account-${a.id}"></p></div>`).join("") || '<p class="small">没有账号。</p>'}</fieldset>
-    <fieldset><legend>${GROUPS.telegram}</legend>${by("telegram").map(fieldHtml).join("")}<p class="small">Token 和 Chat ID 不在网页里显示或修改。</p></fieldset>
     <div class="savebar"><button class="btn primary" type="submit">保存并生效</button><span class="small" id="cfg-msg"></span></div>`;
 }
 

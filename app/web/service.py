@@ -239,11 +239,6 @@ class ConfigService:
             cron_random_window_seconds=self.config.cron_random_window_seconds,
             delivery_mode=self.config.delivery_mode,
             native_sticker_name=self.config.native_sticker_name,
-            telegram_enabled=self.config.telegram_enabled,
-            telegram_bot_token=self.config.telegram_bot_token,
-            telegram_chat_id=self.config.telegram_chat_id,
-            telegram_notify_success=self.config.telegram_notify_success,
-            telegram_notify_failure=self.config.telegram_notify_failure,
         )
 
     # -- 附加 ---------------------------------------------------------------

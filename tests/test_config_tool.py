@@ -190,31 +190,19 @@ class DefaultsAlignmentTests(unittest.TestCase):
             self.env["CRON_RANDOM_WINDOW_SECONDS"],
         )
 
-    def test_telegram_defaults_aligned(self):
-        """布尔值写法不同（False / false），按语义比。"""
-        for key in ("TELEGRAM_ENABLED", "TELEGRAM_NOTIFY_SUCCESS", "TELEGRAM_NOTIFY_FAILURE"):
-            with self.subTest(key=key):
-                self.assertEqual(self.env[key], str(self.ct[key]).lower())
 
 
 class NewKeysRoundTripTests(unittest.TestCase):
-    """发送方式 / Telegram / 随机窗口：落盘再读回必须一致。"""
+    """发送方式 / 随机窗口：落盘再读回必须一致。"""
 
     def test_roundtrip(self):
         cfg = models.Config.from_env_map({})
         cfg.delivery_mode = "native_sticker"
         cfg.native_sticker_name = "续火花"
         cfg.cron_random_window_seconds = 7200
-        cfg.telegram_enabled = True
-        cfg.telegram_bot_token = "tok"
-        cfg.telegram_chat_id = "123"
-        cfg.telegram_notify_success = False
         back = models.Config.from_env_map(cfg.to_env_map())
         self.assertEqual(back.delivery_mode, "native_sticker")
         self.assertEqual(back.cron_random_window_seconds, 7200)
-        self.assertTrue(back.telegram_enabled)
-        self.assertEqual((back.telegram_bot_token, back.telegram_chat_id), ("tok", "123"))
-        self.assertFalse(back.telegram_notify_success)
 
     def test_gui_save_keeps_fields_it_has_no_inputs_for(self):
         """桌面端保存是整份重建；页面没有输入框的字段必须沿用原值，不能被重置成默认。"""
@@ -224,14 +212,9 @@ class NewKeysRoundTripTests(unittest.TestCase):
         svc.config = models.Config.from_env_map({})
         svc.config.delivery_mode = "native_sticker"
         svc.config.cron_random_window_seconds = 7200
-        svc.config.telegram_enabled = True
-        svc.config.telegram_bot_token = "tok"
-        svc.config.telegram_chat_id = "123"
         saved = svc._dict_to_config({})
         self.assertEqual(saved.delivery_mode, "native_sticker")
         self.assertEqual(saved.cron_random_window_seconds, 7200)
-        self.assertTrue(saved.telegram_enabled)
-        self.assertEqual((saved.telegram_bot_token, saved.telegram_chat_id), ("tok", "123"))
 
 
 if __name__ == "__main__":

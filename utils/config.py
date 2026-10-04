@@ -14,10 +14,6 @@ config = None
 userData = None
 
 
-def _env_bool(name, default=False):
-    value = os.getenv(name)
-    return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
-
 def _load_notifications() -> list:
     """读取 .env 的 NOTIFY（JSON 数组）。坏数据只告警、返回空列表。"""
     raw = os.getenv("NOTIFY", "[]")
@@ -50,11 +46,6 @@ def get_config():
         "proxyAddress": os.getenv("PROXY_ADDRESS", ""),
         "deliveryMode": delivery_mode,
         "nativeStickerName": os.getenv("NATIVE_STICKER_NAME", "续火花").strip() or "续火花",
-        "telegramEnabled": _env_bool("TELEGRAM_ENABLED"),
-        "telegramBotToken": os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
-        "telegramChatId": os.getenv("TELEGRAM_CHAT_ID", "").strip(),
-        "telegramNotifySuccess": _env_bool("TELEGRAM_NOTIFY_SUCCESS", True),
-        "telegramNotifyFailure": _env_bool("TELEGRAM_NOTIFY_FAILURE", True),
         "messageTemplate": os.getenv(
             "MESSAGE_TEMPLATE",
             "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n[API]",

@@ -21,9 +21,6 @@ FIELDS = [
     ("DELIVERY_MODE", "enum", "content", "发送方式", "", ("text", "native_sticker"), "text"),
     ("NATIVE_STICKER_NAME", "str", "content", "贴纸名称", "原生贴纸方式下要点的表情包名字", (1, 30), "续火花"),
     ("MESSAGE_TEMPLATE", "str", "content", "文本模板", "文本方式用；\\n 表示换行，[API] 替换为一言", (1, 500), ""),
-    ("TELEGRAM_ENABLED", "bool", "telegram", "开启 Telegram 通知", "", None, "false"),
-    ("TELEGRAM_NOTIFY_SUCCESS", "bool", "telegram", "全部成功时通知", "", None, "true"),
-    ("TELEGRAM_NOTIFY_FAILURE", "bool", "telegram", "有失败时通知", "", None, "true"),
 ]
 BY_KEY = {f[0]: f for f in FIELDS}
 MAX_TARGETS = 50

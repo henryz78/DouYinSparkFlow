@@ -43,9 +43,6 @@ DEFAULT_TZ = "Asia/Shanghai"
 DEFAULT_CRON_RANDOM_WINDOW_SECONDS = 0
 DEFAULT_DELIVERY_MODE = "text"
 DEFAULT_NATIVE_STICKER_NAME = "续火花"
-DEFAULT_TELEGRAM_ENABLED = False
-DEFAULT_TELEGRAM_NOTIFY_SUCCESS = True
-DEFAULT_TELEGRAM_NOTIFY_FAILURE = True
 DEFAULT_MESSAGE_TEMPLATE = "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]"
 DEFAULT_HITOKOTO_TYPES = ["文学", "影视", "诗词", "哲学"]
 DEFAULT_BROWSER_ACTION_TIMEOUT = 120
@@ -88,11 +85,6 @@ BASE_ENV_KEYS = [
     "IM_MAX_STEPS",
     "TASK_RETRY_TIMES",
     "LOG_LEVEL",
-    "TELEGRAM_ENABLED",
-    "TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_CHAT_ID",
-    "TELEGRAM_NOTIFY_SUCCESS",
-    "TELEGRAM_NOTIFY_FAILURE",
     "NOTIFY",
     "TASKS",
 ]
@@ -234,11 +226,6 @@ class Config:
     im_max_steps: int = DEFAULT_IM_MAX_STEPS
     task_retry_times: int = DEFAULT_TASK_RETRY_TIMES
     log_level: str = DEFAULT_LOG_LEVEL
-    telegram_enabled: bool = DEFAULT_TELEGRAM_ENABLED
-    telegram_bot_token: str = ""
-    telegram_chat_id: str = ""
-    telegram_notify_success: bool = DEFAULT_TELEGRAM_NOTIFY_SUCCESS
-    telegram_notify_failure: bool = DEFAULT_TELEGRAM_NOTIFY_FAILURE
     # 消息通知列表：每项 {"type": <方式>, "enabled": bool, ...该方式的参数字段}
     notifications: list = field(default_factory=list)
     accounts: list = field(default_factory=list)
@@ -280,11 +267,6 @@ class Config:
             "IM_MAX_STEPS": str(int(self.im_max_steps)),
             "TASK_RETRY_TIMES": str(int(self.task_retry_times)),
             "LOG_LEVEL": self.log_level or DEFAULT_LOG_LEVEL,
-            "TELEGRAM_ENABLED": str(bool(self.telegram_enabled)).lower(),
-            "TELEGRAM_BOT_TOKEN": self.telegram_bot_token or "",
-            "TELEGRAM_CHAT_ID": self.telegram_chat_id or "",
-            "TELEGRAM_NOTIFY_SUCCESS": str(bool(self.telegram_notify_success)).lower(),
-            "TELEGRAM_NOTIFY_FAILURE": str(bool(self.telegram_notify_failure)).lower(),
             # 通知列表：保持单行 JSON，字段名与 notify_spec 对齐
             "NOTIFY": json.dumps(
                 self.notifications or [], ensure_ascii=False, separators=(",", ":")
@@ -317,12 +299,6 @@ class Config:
             except (TypeError, ValueError):
                 return default
             return max(low, min(high, value))
-
-        def flag(key: str, default: bool) -> bool:
-            value = mapping.get(key)
-            if value is None or not str(value).strip():
-                return default
-            return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
         accounts: list = []
         try:
@@ -407,11 +383,6 @@ class Config:
                 "TASK_RETRY_TIMES", DEFAULT_TASK_RETRY_TIMES, *RETRY_TIMES_RANGE
             ),
             log_level=text("LOG_LEVEL", DEFAULT_LOG_LEVEL) or DEFAULT_LOG_LEVEL,
-            telegram_enabled=flag("TELEGRAM_ENABLED", DEFAULT_TELEGRAM_ENABLED),
-            telegram_bot_token=text("TELEGRAM_BOT_TOKEN").strip(),
-            telegram_chat_id=text("TELEGRAM_CHAT_ID").strip(),
-            telegram_notify_success=flag("TELEGRAM_NOTIFY_SUCCESS", DEFAULT_TELEGRAM_NOTIFY_SUCCESS),
-            telegram_notify_failure=flag("TELEGRAM_NOTIFY_FAILURE", DEFAULT_TELEGRAM_NOTIFY_FAILURE),
             notifications=notifications,
             accounts=accounts,
         )
@@ -439,10 +410,6 @@ def validate(config: Config) -> list:
         issues.append(("错误", f"发送方式只能是 {' / '.join(DELIVERY_MODE_OPTIONS)}，当前是「{config.delivery_mode}」"))
     if config.delivery_mode == "native_sticker" and not config.native_sticker_name.strip():
         issues.append(("错误", "发送方式为原生贴纸时，贴纸名称不能为空"))
-    if config.telegram_enabled and not (
-        config.telegram_bot_token.strip() and config.telegram_chat_id.strip()
-    ):
-        issues.append(("警告", "已开启 Telegram 通知，但 Bot Token 或 Chat ID 为空，运行时不会发出通知"))
     if not config.accounts:
         issues.append(("错误", "至少要有一个账户"))
 

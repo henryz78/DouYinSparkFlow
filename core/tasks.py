@@ -6,7 +6,6 @@ from utils.config import get_config, get_userData
 from core.msg_builder import build_message
 from core.browser import get_browser
 from core.douyin_im import DouyinIM, STATUS_READY, norm
-from core.telegram_notify import method_label, notify_account
 from core.run_log import record_run
 
 
@@ -15,9 +14,16 @@ userData = get_userData()
 logger = setup_logger(level=config.get("logLevel", "Info"))
 
 
+def method_label():
+    """运行记录里显示的发送方式。"""
+    if config["deliveryMode"] == "native_sticker":
+        return "原生贴纸「" + config["nativeStickerName"] + "」"
+    return "文本消息"
+
+
 def do_user_task(browser, username, cookies, targets):
     """一个账号的完整流程：门禁 → 滚动找人 → 发送 → 回执确认。
-    返回 (发送成功数, 问题列表, 每位好友结果)，用来发 Telegram 总结和写运行记录；问题列表为空才算完全成功。
+    返回 (发送成功数, 问题列表, 每位好友结果)，用来写运行记录；问题列表为空才算完全成功。
 
     实现委托给 `core.douyin_im.DouyinIM`：
       任务一（门禁）    DouyinIM 构造时自动完成，结论在 wait_ready() 里
@@ -205,8 +211,7 @@ def runTasks():
                 except Exception:
                     logger.warning(traceback.format_exc())
         friends = [{"name": canon.get(norm(f["name"]), f["name"]), "status": f["status"]} for f in friends]
-        notified = notify_account(config, logger, username, shown, sent_ok, problems)
-        record_run(logger, username, shown, sent_ok, problems, started, friends, notified, method_label(config))
+        record_run(logger, username, shown, sent_ok, problems, started, friends, method_label())
         # 一个账号出错不拖累后面的账号；整体失败 = 异常，或一条都没发出去（含门禁未通过）
         ok = sent_ok is not None and (sent_ok > 0 or not problems)
         if not ok:
