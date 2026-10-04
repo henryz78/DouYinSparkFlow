@@ -160,7 +160,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY . /app
 COPY VERSION ./VERSION
 
-RUN chmod +x /app/docker/entrypoint.sh /app/docker/entrypoint-cron.sh /app/docker/entrypoint-fc.sh /app/docker/run-task.sh
+RUN chmod +x /app/docker/entrypoint.sh /app/docker/entrypoint-cron.sh /app/docker/entrypoint-fc.sh /app/docker/run-task.sh /app/docker/apply-config.sh
 
 ENV BROWSER_HEADLESS=true \
     DISPLAY=:99 \

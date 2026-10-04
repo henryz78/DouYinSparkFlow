@@ -49,5 +49,29 @@ class RecordRunTests(unittest.TestCase):
             run_log.record_run(logging.getLogger("t"), "a", [], 0, [], datetime.now().astimezone())
 
 
+class TodayDoneTests(unittest.TestCase):
+    def _rows(self, *rows):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        f = Path(d.name) / "runs.jsonl"
+        lines = [json.dumps(r) for r in rows] + ["garbage"]
+        f.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+        return f
+
+    def _row(self, account, status, day=None):
+        day = day or datetime.now().astimezone().date().isoformat()
+        return {"start": f"{day}T08:00:00+08:00", "account": account, "status": status}
+
+    def test_done_only_when_every_account_last_run_ok(self):
+        self.assertTrue(run_log.today_done(self._rows(self._row("a", "ok"))))
+        self.assertFalse(run_log.today_done(self._rows(self._row("a", "ok"), self._row("b", "failed"))))
+        # 先失败后手动补发成功 → 算完成
+        self.assertTrue(run_log.today_done(self._rows(self._row("a", "failed"), self._row("a", "ok"))))
+
+    def test_not_done_without_todays_rows(self):
+        self.assertFalse(run_log.today_done(self._rows(self._row("a", "ok", "2020-01-01"))))
+        self.assertFalse(run_log.today_done(Path("/nonexistent/runs.jsonl")))
+
+
 if __name__ == "__main__":
     unittest.main()

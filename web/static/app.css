@@ -118,6 +118,43 @@ h1, h2, p, ul { margin: 0; padding: 0; }
 .log { margin: 16px 0 0; padding: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; font: 400 12.5px/1.65 var(--mono); color: var(--ink-2); overflow: auto; max-height: 68vh; white-space: pre-wrap; word-break: break-all; }
 .log .WARNING { color: var(--warning); } .log .ERROR, .log .CRITICAL { color: var(--danger); }
 
+/* login / dialog / inputs */
+.btn.primary { background: var(--ink); border: 1px solid var(--ink); color: var(--paper); }
+.btn.primary:hover:not(:disabled) { background: var(--ink-hover); }
+.btn.primary:active:not(:disabled) { background: var(--ink-pressed); }
+.input { display: block; width: 100%; height: 44px; margin: 8px 0 0; padding: 0 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; font: 400 15px/1 var(--text); color: var(--ink); transition: border-color 120ms var(--ease); }
+.input:hover { border-color: var(--line-hover); }
+.login-card { max-width: 380px; margin: 96px auto 0; display: grid; gap: 4px; }
+.login-card h1 { margin-bottom: 16px; }
+.login-card .btn { margin-top: 16px; }
+.err { color: var(--danger); min-height: 1.5em; margin-top: 8px; }
+.locked #links, .locked #run-btn, .locked .tab { display: none; }
+.dlg { border: 1px solid var(--line); border-radius: 12px; padding: 28px; max-width: 420px; background: var(--surface); color: var(--ink); }
+.dlg::backdrop { background: rgba(26, 25, 23, .35); }
+.dlg .body { margin-top: 12px; color: var(--ink-2); }
+.dlg-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
+.foot-in { display: flex; justify-content: space-between; align-items: center; }
+.linkbtn { background: none; border: 0; color: var(--paper); opacity: .7; font: 500 13px/1 var(--text); cursor: pointer; text-decoration: underline; text-underline-offset: 4px; padding: 8px 0; }
+.linkbtn:hover { opacity: 1; }
+
+/* config form */
+.cfg { margin-top: 40px; }
+.cfg fieldset { border: 0; padding: 0; margin: 0 0 56px; }
+.cfg legend { width: 100%; padding: 0 0 12px; border-bottom: 1px solid var(--ink); margin-bottom: 24px; font: 400 24px/1.2 var(--display); }
+.field { margin-bottom: 20px; max-width: 520px; }
+.field label, .field .lbl { display: block; font: 500 13px/1.4 var(--text); color: var(--ink-2); }
+.field .small { margin-top: 6px; }
+.field .error { color: var(--danger); }
+.row3 { display: flex; gap: 12px; max-width: 520px; }
+.row3 .field { flex: 1; margin-bottom: 0; }
+.cfg textarea.input { height: auto; min-height: 120px; padding: 12px 14px; line-height: 1.6; resize: vertical; }
+.cfg select.input { appearance: auto; }
+.switch { display: flex; align-items: center; gap: 12px; padding: 10px 0; font: 400 15px/1.4 var(--text); cursor: pointer; }
+.switch input { width: 18px; height: 18px; accent-color: var(--ink); }
+.savebar { display: flex; align-items: center; gap: 16px; position: sticky; bottom: 0; padding: 16px 0; background: linear-gradient(to top, var(--paper) 70%, transparent); }
+.savebar .ok { color: var(--success); } .savebar .bad { color: var(--danger); }
+.acct { margin-bottom: 24px; }
+
 /* footer */
 .foot { background: var(--ink); color: var(--paper); padding: 28px 0; }
 .foot .small { color: var(--paper); opacity: .7; }

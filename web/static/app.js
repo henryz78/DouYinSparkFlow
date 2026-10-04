@@ -4,7 +4,13 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 const pad = (n) => String(n).padStart(2, "0");
 const hm = (iso) => { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const md = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1} 月 ${d.getDate()} 日`; };
-const get = (url) => fetch(url).then((r) => r.json());
+const get = async (url) => {
+  const r = await fetch(url);
+  if (r.status === 401) { showLogin(); throw new Error("401"); }
+  return r.json();
+};
+const post = (url, body) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+const showLogin = () => { document.body.classList.add("locked"); $("login").hidden = false; $("pw").focus(); };
 
 function dayWord(iso) {
   const d = new Date(iso), t = new Date();
@@ -39,6 +45,7 @@ function detailHtml(r) {
 
 const HERO = {
   ok: ["今天", "已发送", "", ""],
+  running: ["今天", "发送中", "", ""],
   partial: ["今天", "部分发送", "", "alert"],
   failed: ["今天", "发送失败", "", "alert"],
   pending: ["今天", "还没到点", "", ""],
@@ -71,12 +78,14 @@ function drawClock() {
 async function loadOverview() {
   const [s, runs] = await Promise.all([get("/api/summary"), get("/api/runs?limit=5")]);
   sum = s;
-  const [a, b, , cls] = HERO[s.state];
+  const [a, b, , cls] = HERO[s.running ? "running" : s.state];
+  setRunning(s.running);
   $("hero").innerHTML = `${a}<br><em>${b}</em>`;
   $("today-eyebrow").className = "eyebrow " + cls;
   $("today-eyebrow").textContent = cls ? "需要你处理" : "今日";
   $("hero-sub").textContent =
-    s.state === "pending" ? `预计 ${hm(s.next_start)} – ${hm(s.next_end)} 之间发送。`
+    s.running ? "任务正在运行，完成后这里会自动更新。"
+    : s.state === "pending" ? `预计 ${hm(s.next_start)} – ${hm(s.next_end)} 之间发送。`
     : s.state === "missing" ? "发送窗口已过，今天还没有运行记录。去日志里看看容器有没有在跑。"
     : `已发送 ${s.sent} / ${s.targets} 位好友，${hm(s.finished)} 完成。${s.problems.length ? "问题：" + s.problems.join("；") : ""}`;
   $("friends").innerHTML = s.friends.map((f) => `<li>${esc(f.name)}<span class="state ${f.status}">${FSTATE[f.status] || f.status}</span></li>`).join("");
@@ -130,7 +139,71 @@ function chips(id, set) {
 chips("run-filter", (f) => { runFilter = f; drawRuns(); });
 chips("log-filter", (f) => { logFilter = f; drawLogs(); });
 
-const LOAD = { overview: loadOverview, runs: loadRuns, logs: loadLogs };
+// ---- 配置页：字段由后端 /api/config 描述，这里只负责渲染和提交变更的部分 ----
+let cfgLoaded = null;
+const GROUPS = { time: "发送时间", content: "发送内容", telegram: "Telegram 通知" };
+const ENUM = { text: "文本消息", native_sticker: "原生贴纸" };
+const attr = (s) => esc(s).replace(/'/g, "&#39;");
+
+function fieldHtml(f) {
+  const id = "f-" + f.key;
+  if (f.type === "bool") return `<label class="switch"><input type="checkbox" id="${id}" ${f.value ? "checked" : ""}>${f.label}</label>`;
+  if (f.type === "enum") return `<div class="field"><label for="${id}">${f.label}</label><select class="input" id="${id}">${f.range.map((o) => `<option value="${o}" ${o === f.value ? "selected" : ""}>${ENUM[o] || o}</option>`).join("")}</select></div>`;
+  if (f.type === "int") {
+    const minutes = f.key === "CRON_RANDOM_WINDOW_SECONDS";
+    const [lo, hi] = minutes ? [0, f.range[1] / 60] : f.range;
+    return `<div class="field"><label for="${id}">${minutes ? "随机窗口（分钟）" : f.label}</label><input class="input" type="number" id="${id}" min="${lo}" max="${hi}" value="${minutes ? Math.round(f.value / 60) : Number(f.value)}">${f.hint && !minutes ? `<p class="small">${f.hint}</p>` : minutes ? '<p class="small">到点后再随机等 0 到这么多分钟才发送，0 表示不随机</p>' : ""}<p class="small error" data-err="${f.key}"></p></div>`;
+  }
+  return `<div class="field"><label for="${id}">${f.label}</label>${f.key === "MESSAGE_TEMPLATE" ? `<textarea class="input" id="${id}" rows="3">${esc(f.value)}</textarea>` : `<input class="input" id="${id}" value="${attr(f.value)}">`}${f.hint ? `<p class="small">${esc(f.hint)}</p>` : ""}<p class="small error" data-err="${f.key}"></p></div>`;
+}
+
+async function loadConfig() {
+  const c = await get("/api/config");
+  cfgLoaded = c;
+  const by = (g) => c.fields.filter((f) => f.group === g);
+  const time = by("time"), hms = time.slice(0, 3);
+  $("cfg-form").innerHTML = `
+    <fieldset><legend>${GROUPS.time}</legend>
+      <div class="row3">${hms.map(fieldHtml).join("")}</div>
+      <p class="small" style="margin:6px 0 20px">每天这个时刻触发，再叠加下面的随机窗口。</p>
+      ${time.slice(3).map(fieldHtml).join("")}</fieldset>
+    <fieldset><legend>${GROUPS.content}</legend>${by("content").map(fieldHtml).join("")}</fieldset>
+    <fieldset><legend>好友名单</legend>${c.accounts.map((a) => `<div class="field acct"><label for="acct-${a.id}">${esc(a.name)}（每行一位好友）</label><textarea class="input" id="acct-${a.id}" rows="${Math.max(3, a.targets.length + 1)}">${esc(a.targets.join("\n"))}</textarea><p class="small error" data-err="account-${a.id}"></p></div>`).join("") || '<p class="small">没有账号。</p>'}</fieldset>
+    <fieldset><legend>${GROUPS.telegram}</legend>${by("telegram").map(fieldHtml).join("")}<p class="small">Token 和 Chat ID 不在网页里显示或修改。</p></fieldset>
+    <div class="savebar"><button class="btn primary" type="submit">保存并生效</button><span class="small" id="cfg-msg"></span></div>`;
+}
+
+$("cfg-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!cfgLoaded) return;
+  const values = {}, targets = {};
+  for (const f of cfgLoaded.fields) {
+    const el = $("f-" + f.key);
+    let v = f.type === "bool" ? el.checked : f.type === "int" ? Number(el.value) : el.value;
+    if (f.key === "CRON_RANDOM_WINDOW_SECONDS") v = Math.round(v * 60);
+    const old = f.type === "int" ? Number(f.value) : f.value;
+    if (v !== old) values[f.key] = v;  // 只提交改过的项，没动的原样保留
+  }
+  for (const a of cfgLoaded.accounts) {
+    const names = $("acct-" + a.id).value.split("\n").map((x) => x.trim()).filter(Boolean);
+    if (JSON.stringify(names) !== JSON.stringify(a.targets)) targets[a.id] = names;
+  }
+  document.querySelectorAll("[data-err]").forEach((p) => (p.textContent = ""));
+  const msg = $("cfg-msg"); msg.className = "small"; msg.textContent = "保存中…";
+  const r = await post("/api/config", { values, targets });
+  if (r.status === 401) return showLogin();
+  const out = await r.json();
+  if (r.status === 400) {
+    for (const [k, m] of Object.entries(out.errors)) { const p = document.querySelector(`[data-err="${k}"]`); if (p) p.textContent = m; }
+    msg.className = "small bad"; msg.textContent = "有内容不合法，请看红字提示。";
+    return;
+  }
+  msg.className = "small " + (out.ok ? "ok" : "bad");
+  msg.textContent = out.message || out.error || "失败";
+  if (out.ok) loadConfig().then(() => { $("cfg-msg").className = "small ok"; $("cfg-msg").textContent = out.message; });
+});
+
+const LOAD = { overview: loadOverview, runs: loadRuns, logs: loadLogs, config: loadConfig };
 let timer;
 function route() {
   const tab = LOAD[location.hash.slice(1)] ? location.hash.slice(1) : "overview";
@@ -142,6 +215,35 @@ function route() {
   if (tab === "logs") timer = setInterval(() => $("log-auto").checked && loadLogs().catch(() => {}), 5000);
   window.scrollTo(0, 0);
 }
+let pollTimer;
+function setRunning(on) {
+  $("run-btn").disabled = on;
+  $("run-btn").textContent = on ? "运行中…" : "立即运行";
+  clearTimeout(pollTimer);
+  if (on) pollTimer = setTimeout(() => LOAD[currentTab()]().catch(() => {}), 3000);
+}
+const currentTab = () => (LOAD[location.hash.slice(1)] ? location.hash.slice(1) : "overview");
+
+$("run-btn").addEventListener("click", () => $("confirm").showModal());
+$("confirm").addEventListener("close", async () => {
+  if ($("confirm").returnValue !== "ok") return;
+  const r = await post("/api/run");
+  if (r.status === 401) return showLogin();
+  if (!r.ok) alert((await r.json()).error || "启动失败");
+  setRunning(true);
+  location.hash = "#overview";
+  loadOverview().catch(() => {});
+});
+$("login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const r = await post("/api/login", { password: $("pw").value });
+  if (!r.ok) { $("login-err").textContent = (await r.json()).error || "登录失败"; return; }
+  $("pw").value = ""; $("login-err").textContent = "";
+  document.body.classList.remove("locked"); $("login").hidden = true;
+  route();
+});
+$("logout").addEventListener("click", async () => { await post("/api/logout"); location.reload(); });
+
 addEventListener("hashchange", route);
 addEventListener("scroll", () => $("nav").classList.toggle("scrolled", scrollY > 4), { passive: true });
 route();

@@ -28,9 +28,12 @@ services:
       GITHUB_ACTIONS: "true"
       PYTHONUNBUFFERED: "1"
     volumes:
-      # 配置（含 TASKS / COOKIES_* / CRON_HOUR / TZ），只读挂载
-      - ${CONFIG_ENV_FILE:-./config/.env}:/app/.env:ro
+      # 配置（含 TASKS / COOKIES_* / CRON_HOUR / TZ）。可写：个人控制台的「配置」页要改它
+      - ${CONFIG_ENV_FILE:-./config/.env}:/app/.env
       - ${LOGS_DIR:-./logs}:/app/logs
+    # 个人控制台（可选）：config/.env 里设了 DASH_PASSWORD_HASH 才会启动，否则这个端口无人监听
+    ports:
+      - "${DASH_HOST_PORT:-8443}:8443"
 
   # ===========================================================================
   # ② 配套代理：给本地 configTool 提供与任务容器一致的出口

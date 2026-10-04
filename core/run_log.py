@@ -35,3 +35,25 @@ def record_run(logger, username, targets, sent_ok, problems, started, friends=()
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception as exc:
         logger.warning(f"运行记录写入失败：{exc}")
+
+
+def today_done(path=None, now=None):
+    """今天每个账号最后一次运行都成功了吗？定时任务据此跳过，避免手动运行后又重复发一遍。"""
+    last = {}
+    today = (now or datetime.now().astimezone()).date().isoformat()
+    try:
+        with open(path or RUNS_FILE, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r["start"][:10] == today:
+                    last[r["account"]] = r["status"]
+    except FileNotFoundError:
+        return False
+    return bool(last) and all(st == "ok" for st in last.values())
+
+
+if __name__ == "__main__":  # run-task.sh 用：退出码 0 = 今天已完成
+    raise SystemExit(0 if today_done() else 1)
