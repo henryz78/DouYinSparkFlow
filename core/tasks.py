@@ -4,7 +4,9 @@ from utils.config import get_config, get_userData
 from core.msg_builder import build_message
 from core.browser import get_browser
 from core.douyin_im import DouyinIM, STATUS_READY, norm
+from datetime import datetime
 from core.telegram_notify import notify_account
+from core.run_log import record_run
 
 
 config = get_config()
@@ -171,14 +173,17 @@ def runTasks():
         username = user.get("username", "未知用户")
         fingerprint = user.get("fingerprint", None)
         logger.info(f"开始处理账号 {username}")
-        # 创建任务
+        started = datetime.now().astimezone()
         try:
             browser = get_browser(fingerprint)
             sent_ok, problems = do_user_task(browser, username, cookies, targets)
             logger.info(f"账号 {username} 任务完成")
+            record_run(logger, username, shown, sent_ok, problems, started)
             notify_account(config, logger, username, shown, sent_ok, problems)
         except Exception as exc:
-            notify_account(config, logger, username, shown, None, [f"{type(exc).__name__}: {exc}"[:300]])
+            err = [f"{type(exc).__name__}: {exc}"[:300]]
+            record_run(logger, username, shown, None, err, started)
+            notify_account(config, logger, username, shown, None, err)
             raise
         finally:
             # 关闭浏览器实例
