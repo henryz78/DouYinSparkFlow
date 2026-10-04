@@ -5,7 +5,7 @@ from core.msg_builder import build_message
 from core.browser import get_browser
 from core.douyin_im import DouyinIM, STATUS_READY, norm
 from datetime import datetime
-from core.telegram_notify import notify_account
+from core.telegram_notify import method_label, notify_account
 from core.run_log import record_run
 
 
@@ -16,7 +16,7 @@ logger = setup_logger(level=config.get("logLevel", "Info"))
 
 def do_user_task(browser, username, cookies, targets):
     """一个账号的完整流程：门禁 → 滚动找人 → 发送 → 回执确认。
-    返回 (发送成功数, 问题列表)，用来发 Telegram 总结；问题列表为空才算完全成功。
+    返回 (发送成功数, 问题列表, 每位好友结果)，用来发 Telegram 总结和写运行记录；问题列表为空才算完全成功。
 
     实现委托给 `core.douyin_im.DouyinIM`：
       任务一（门禁）    DouyinIM 构造时自动完成，结论在 wait_ready() 里
@@ -67,7 +67,7 @@ def do_user_task(browser, username, cookies, targets):
                 "ERROR": "内部错误",
             }.get(res.get("status"), res.get("status"))
             logger.error(f"账号 {username} 操作前检查未通过：{reason}，跳过该账号")
-            return 0, [f"操作前检查未通过：{reason}"]
+            return 0, [f"操作前检查未通过：{reason}"], []
 
         logger.info(
             f"账号 {username} 门禁通过  user_id={res.get('user_id')} "
@@ -76,6 +76,7 @@ def do_user_task(browser, username, cookies, targets):
 
         sent_ok = sent_fail = 0
         failed = []
+        results = {}  # 好友 → ok / failed / missing / select_failed，给控制台逐人显示
 
         # 生成器：yield 出来的那一刻，对应好友的会话已经被选中
         for friend in im.iter_find_and_select(targets):
@@ -84,6 +85,7 @@ def do_user_task(browser, username, cookies, targets):
             r = send(friend, message)
             if r["ok"]:
                 sent_ok += 1
+                results[friend["display"]] = "ok"
                 logger.info(
                     f"账号 {username} → {friend['display']} 发送成功"
                     f"（{r.get('via')} message_id={r.get('message_id') or '-'}）"
@@ -91,6 +93,7 @@ def do_user_task(browser, username, cookies, targets):
             else:
                 sent_fail += 1
                 failed.append(friend["display"])
+                results[friend["display"]] = "failed"
                 # 重试一次：用 conv_id 重新选中（列表可能已滚动，原来的下标失效）
                 logger.warning(
                     f"账号 {username} → {friend['display']} 未拿到回执，重试一次"
@@ -102,6 +105,7 @@ def do_user_task(browser, username, cookies, targets):
                             sent_ok += 1
                             sent_fail -= 1
                             failed.pop()
+                            results[friend["display"]] = "ok"
                             logger.info(
                                 f"账号 {username} → {friend['display']} 重试成功"
                             )
@@ -127,6 +131,11 @@ def do_user_task(browser, username, cookies, targets):
                 f"账号 {username} 找到但选中失败：{scan['select_failed']}"
             )
 
+        for n in scan.get("missing") or []:
+            results[str(n)] = "missing"
+        for n in scan.get("select_failed") or []:
+            results[str(n)] = "select_failed"
+
         problems = []
         if failed:
             problems.append(f"发送失败：{'、'.join(failed)}")
@@ -141,7 +150,7 @@ def do_user_task(browser, username, cookies, targets):
                 f"账号 {username} 注意：折叠组/陌生人组里有内容 {folds}，"
                 f"主列表扫不到，目标可能被折叠"
             )
-        return sent_ok, problems
+        return sent_ok, problems, [{"name": n, "status": s} for n, s in results.items()]
     finally:
         if im is not None:
             try:
@@ -174,16 +183,18 @@ def runTasks():
         fingerprint = user.get("fingerprint", None)
         logger.info(f"开始处理账号 {username}")
         started = datetime.now().astimezone()
+        canon = {norm(t): t for t in shown}  # 运行记录里好友名还原成配置里的原名
         try:
             browser = get_browser(fingerprint)
-            sent_ok, problems = do_user_task(browser, username, cookies, targets)
+            sent_ok, problems, friends = do_user_task(browser, username, cookies, targets)
             logger.info(f"账号 {username} 任务完成")
-            record_run(logger, username, shown, sent_ok, problems, started)
-            notify_account(config, logger, username, shown, sent_ok, problems)
+            notified = notify_account(config, logger, username, shown, sent_ok, problems)
+            friends = [{"name": canon.get(norm(f["name"]), f["name"]), "status": f["status"]} for f in friends]
+            record_run(logger, username, shown, sent_ok, problems, started, friends, notified, method_label(config))
         except Exception as exc:
             err = [f"{type(exc).__name__}: {exc}"[:300]]
-            record_run(logger, username, shown, None, err, started)
-            notify_account(config, logger, username, shown, None, err)
+            notified = notify_account(config, logger, username, shown, None, err)
+            record_run(logger, username, shown, None, err, started, [], notified, method_label(config))
             raise
         finally:
             # 关闭浏览器实例

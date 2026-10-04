@@ -25,19 +25,40 @@
 <main class="wrap">
   <!-- 概览 -->
   <section class="tab" id="tab-overview">
-    <div class="rise">
-      <p class="eyebrow" id="today-eyebrow">今日</p>
-      <h1 class="display-xl" id="hero">…</h1>
-      <p class="body lead" id="hero-sub"></p>
+    <div class="hero rise">
+      <div>
+        <p class="eyebrow" id="today-eyebrow">今日</p>
+        <h1 class="display-xl" id="hero">…</h1>
+        <p class="body lead" id="hero-sub"></p>
+        <ul class="friends" id="friends"></ul>
+      </div>
+      <aside class="card" id="next-card">
+        <p class="eyebrow">下次运行</p>
+        <p class="clock" id="clock">–</p>
+        <p class="small" id="clock-note"></p>
+        <div class="bar" id="bar" hidden><i id="bar-fill"></i></div>
+        <p class="small when-line" id="next-sub"></p>
+      </aside>
     </div>
 
     <div class="stats rise">
-      <div class="stat"><p class="eyebrow">连续天数</p><p class="num" id="s-streak">–</p><p class="small" id="s-best"></p></div>
-      <div class="stat"><p class="eyebrow">近 30 天成功率</p><p class="num" id="s-rate">–</p><p class="small" id="s-days"></p></div>
-      <div class="stat"><p class="eyebrow">下次运行</p><p class="num sm" id="s-next">–</p><p class="small" id="s-next-sub"></p></div>
+      <div class="stat"><p class="eyebrow">连续天数</p><p class="num" id="s-streak">–</p><p class="small" id="s-days"></p></div>
+      <div class="stat"><p class="eyebrow">历史最长</p><p class="num" id="s-best">–</p><p class="small">连续成功的天数</p></div>
+      <div class="stat"><p class="eyebrow">近 30 天成功率</p><p class="num" id="s-rate">–</p><p class="small" id="s-rate-sub"></p></div>
     </div>
 
-    <div class="rise">
+    <div class="rise block">
+      <div class="head"><h2 class="display-m">近 30 天</h2>
+        <span class="legend small"><i class="sq ok"></i>成功 <i class="sq partial"></i>部分 <i class="sq failed"></i>失败 <i class="sq none"></i>无记录</span></div>
+      <div class="cal" id="cal"></div>
+    </div>
+
+    <div class="rise block">
+      <div class="head"><h2 class="display-m">系统状态</h2></div>
+      <div class="health" id="health"></div>
+    </div>
+
+    <div class="rise block">
       <div class="head"><h2 class="display-m">最近记录</h2><a class="arrow" href="#runs">查看全部 <span>→</span></a></div>
       <ul class="rows" id="recent"></ul>
     </div>

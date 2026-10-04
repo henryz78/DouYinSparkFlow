@@ -43,21 +43,25 @@ def _post(config, logger, text):
         return False
 
 
+def method_label(config):
+    return "原生贴纸「" + config["nativeStickerName"] + "」" if config["deliveryMode"] == "native_sticker" else "文本消息"
+
+
 def notify_account(config, logger, username, targets, sent_ok, problems):
-    """一个账号跑完发一条总结。problems 为空且 sent_ok>0 才算成功；sent_ok=None 表示中途异常、数量未确定。"""
+    """一个账号跑完发一条总结。problems 为空且 sent_ok>0 才算成功；sent_ok=None 表示中途异常、数量未确定。
+    返回 True/False=发了且成功/失败，None=没发（未开启或被开关过滤）。"""
     if not config["telegramEnabled"]:
-        return False
+        return None
     ok = bool(sent_ok) and not problems
     if not (config["telegramNotifySuccess"] if ok else config["telegramNotifyFailure"]):
-        return False
+        return None
     header = "✅ 火花任务完成" if ok else ("⚠️ 火花任务未完全完成" if sent_ok else "❌ 火花任务失败")
-    method = "原生贴纸「" + config["nativeStickerName"] + "」" if config["deliveryMode"] == "native_sticker" else "文本消息"
     lines = [
         header,
         "",
         f"时间：{_now()}",
         f"账号：{username}",
-        f"方式：{method}",
+        f"方式：{method_label(config)}",
         f"结果：{'任务中断（完成数量未确定）' if sent_ok is None else f'{sent_ok}/{len(targets)} 已发送'}",
         f"目标好友：{'、'.join(targets) or '无'}",
     ]

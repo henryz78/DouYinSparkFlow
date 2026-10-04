@@ -5,6 +5,7 @@
 
 import json
 import os
+import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,6 +16,7 @@ from web.stats import load_runs, summary
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).resolve().parent / "static"
 LOGS = Path(os.getenv("DASH_LOGS_DIR") or ROOT / "logs")
+STARTED = time.time()
 TYPES = {".html": "text/html", ".css": "text/css", ".js": "text/javascript"}
 
 
@@ -35,6 +37,13 @@ def env_int(name, default):
         return int(os.getenv(name, default))
     except ValueError:
         return default
+
+
+def version():
+    try:
+        return (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return os.getenv("IMAGE_VERSION", "")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -62,11 +71,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if url.path == "/api/summary":
             rows = load_runs(LOGS / "runs.jsonl")
-            self._json(summary(
+            out = summary(
                 rows, datetime.now().astimezone(),
                 env_int("CRON_HOUR", 8), env_int("CRON_MINUTE", 0),
                 env_int("CRON_SECOND", 0), env_int("CRON_RANDOM_WINDOW_SECONDS", 0),
-            ))
+            )
+            # 控制台和任务在同一个容器里，进程运行多久 ≈ 容器运行多久
+            out["health"]["uptime"] = int(time.time() - STARTED)
+            out["health"]["version"] = version()
+            self._json(out)
         elif url.path == "/api/runs":
             rows = load_runs(LOGS / "runs.jsonl")
             self._json(rows[::-1][: num("limit", 100, 1000)])

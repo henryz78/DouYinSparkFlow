@@ -35,6 +35,15 @@ class RecordRunTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual((rows[0]["sent"], rows[0]["targets"], rows[0]["account"]), (2, 2, "acc"))
 
+    def test_friends_and_notified_recorded(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "runs.jsonl"
+            with mock.patch.object(run_log, "RUNS_FILE", f):
+                run_log.record_run(logging.getLogger("t"), "a", ["x"], 1, [], datetime.now().astimezone(),
+                                   [{"name": "x", "status": "ok"}], True)
+            row = json.loads(f.read_text(encoding="utf-8"))
+        self.assertEqual((row["friends"], row["notified"]), ([{"name": "x", "status": "ok"}], True))
+
     def test_write_failure_is_swallowed(self):
         with mock.patch.object(run_log, "RUNS_FILE", Path("/proc/nope/x/runs.jsonl")):
             run_log.record_run(logging.getLogger("t"), "a", [], 0, [], datetime.now().astimezone())

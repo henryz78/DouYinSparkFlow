@@ -53,26 +53,61 @@ def next_window(now, hour, minute, second, window, ran_today):
     return start, start + timedelta(seconds=window)
 
 
+def state_of(last_rows):
+    """一组（每账号最后一次）运行 → ok / partial / failed。"""
+    if all(r["status"] == "ok" for r in last_rows):
+        return "ok"
+    return "partial" if any(r["sent"] > 0 for r in last_rows) else "failed"
+
+
+def last_per_day(rows):
+    """{日期: [每个账号当天最后一次运行]}"""
+    last = {}
+    for r in rows:
+        last[(r["start"][:10], r["account"])] = r
+    days = {}
+    for (d, _), r in last.items():
+        days.setdefault(d, []).append(r)
+    return days
+
+
+def health(rows):
+    """从最近一次运行推断的健康状态；没有记录则全是 unknown。"""
+    if not rows:
+        return {"login": "unknown", "telegram": "unknown"}
+    latest = last_per_day(rows)[max(last_per_day(rows))]
+    notified = [r.get("notified") for r in latest]
+    return {
+        "login": "bad" if any("登录" in p for r in latest for p in r["problems"]) else "ok",
+        "telegram": "failed" if False in notified else "ok" if True in notified else "off",
+    }
+
+
 def summary(rows, now, hour=8, minute=0, second=0, window=0):
     today = now.date()
     days = day_status(rows)
     cur, best = streaks(days, today)
     recent = [ok for d, ok in days.items() if (today - datetime.strptime(d, "%Y-%m-%d").date()).days < 30]
 
-    last = {}
-    for r in rows:
-        if r["start"][:10] == today.isoformat():
-            last[r["account"]] = r
-    todays = list(last.values())
+    per_day = last_per_day(rows)
+    todays = per_day.get(today.isoformat(), [])
     if not todays:
         w_end = now.replace(hour=hour, minute=minute, second=second, microsecond=0) + timedelta(seconds=window)
         state = "pending" if now <= w_end else "missing"
-    elif all(r["status"] == "ok" for r in todays):
-        state = "ok"
-    elif any(r["sent"] > 0 for r in todays):
-        state = "partial"
     else:
-        state = "failed"
+        state = state_of(todays)
+
+    # 好友逐人：今天跑过用今天的；没跑过沿用最近一次的名单，全部标「等待」
+    if todays:
+        friends = [f for r in todays for f in r.get("friends", [])]
+    elif per_day:
+        friends = [{"name": f["name"], "status": "waiting"} for r in per_day[max(per_day)] for f in r.get("friends", [])]
+    else:
+        friends = []
+    calendar = []
+    for i in range(29, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        calendar.append({"date": d, "status": state_of(per_day[d]) if d in per_day else "none"})
 
     start, end = next_window(now, hour, minute, second, window, bool(todays))
     return {
@@ -81,6 +116,9 @@ def summary(rows, now, hour=8, minute=0, second=0, window=0):
         "targets": sum(r["targets"] for r in todays),
         "finished": max((r["end"] for r in todays), default=None),
         "problems": [p for r in todays for p in r["problems"]],
+        "friends": friends,
+        "calendar": calendar,
+        "health": health(rows),
         "streak": cur,
         "best_streak": best,
         "rate_30": round(100 * sum(recent) / len(recent)) if recent else None,

@@ -51,6 +51,21 @@ class SummaryTests(unittest.TestCase):
         rows = [row("2026-10-01"), row("2026-10-02", "failed", sent=0)]
         self.assertEqual(summary(rows, self.now)["rate_30"], 50)
 
+    def test_calendar_friends_health(self):
+        f = [{"name": "Rick", "status": "ok"}]
+        rows = [dict(row("2026-10-02"), friends=f, notified=True),
+                dict(row("2026-10-03", "failed", sent=0, problems=["登录已失效"]), friends=[], notified=False)]
+        out = summary(rows, self.now)
+        self.assertEqual(len(out["calendar"]), 30)
+        self.assertEqual([c["status"] for c in out["calendar"][-3:]], ["none", "ok", "failed"])
+        self.assertEqual(out["health"], {"login": "bad", "telegram": "failed"})
+        # 今天还没跑：沿用上次名单，标记等待
+        out = summary(rows[:1], self.now.replace(day=4))
+        self.assertEqual(out["friends"], [{"name": "Rick", "status": "waiting"}])
+
+    def test_health_empty(self):
+        self.assertEqual(summary([], self.now)["health"], {"login": "unknown", "telegram": "unknown"})
+
 
 if __name__ == "__main__":
     unittest.main()
