@@ -81,7 +81,7 @@ def health(rows):
     }
 
 
-def summary(rows, now, hour=8, minute=0, second=0, window=0):
+def summary(rows, now, hour=8, minute=0, second=0, window=0, planned=None):
     today = now.date()
     days = day_status(rows)
     cur, best = streaks(days, today)
@@ -123,4 +123,6 @@ def summary(rows, now, hour=8, minute=0, second=0, window=0):
         "days_recorded": len(days),
         "next_start": start.isoformat(timespec="seconds"),
         "next_end": end.isoformat(timespec="seconds"),
+        # 今天已随机到的发送时间（cron 到点后才有；已发过或不是今天的不算）
+        "planned": planned.isoformat(timespec="seconds") if planned and not todays and planned.date() == today else None,
     }

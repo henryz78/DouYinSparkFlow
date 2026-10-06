@@ -84,11 +84,11 @@ async function loadOverview() {
   $("today-eyebrow").textContent = cls ? "需要你处理" : "今日";
   $("hero-sub").textContent =
     s.running ? "任务正在运行，完成后这里会自动更新。"
-    : s.state === "pending" ? `预计 ${hm(s.next_start)} – ${hm(s.next_end)} 之间发送。`
+    : s.state === "pending" ? (s.planned ? `今天已随机到 ${hm(s.planned)} 发送。` : `预计 ${hm(s.next_start)} – ${hm(s.next_end)} 之间发送。`)
     : s.state === "missing" ? "发送窗口已过，今天还没有运行记录。去日志里看看容器有没有在跑。"
     : `已发送 ${s.sent} / ${s.targets} 位好友，${hm(s.finished)} 完成。${s.problems.length ? "问题：" + s.problems.join("；") : ""}`;
   $("friends").innerHTML = s.friends.map((f) => `<li>${esc(f.name)}<span class="state ${f.status}">${FSTATE[f.status] || f.status}</span></li>`).join("");
-  $("next-sub").textContent = `${dayWord(s.next_start)} ${hm(s.next_start)}` + (s.next_end !== s.next_start ? ` – ${hm(s.next_end)}（随机窗口）` : "（定点发送）");
+  $("next-sub").textContent = s.planned ? `今天 ${hm(s.planned)}（已随机到）` : `${dayWord(s.next_start)} ${hm(s.next_start)}` + (s.next_end !== s.next_start ? ` – ${hm(s.next_end)}（随机窗口）` : "（定点发送）");
   $("s-streak").textContent = s.streak;
   $("s-days").textContent = `已记录 ${s.days_recorded} 天`;
   $("s-best").textContent = s.best_streak;

@@ -63,6 +63,13 @@ class SummaryTests(unittest.TestCase):
         out = summary(rows[:1], self.now.replace(day=4))
         self.assertEqual(out["friends"], [{"name": "Rick", "status": "waiting"}])
 
+    def test_planned_time_only_for_today_and_unsent(self):
+        planned = self.now.replace(hour=9, minute=15)
+        self.assertEqual(summary([], self.now, planned=planned)["planned"], planned.isoformat(timespec="seconds"))
+        self.assertIsNone(summary([], self.now)["planned"])
+        self.assertIsNone(summary([], self.now, planned=planned - timedelta(days=1))["planned"])  # 昨天的
+        self.assertIsNone(summary([row(self.now.date().isoformat())], self.now, planned=planned)["planned"])  # 今天已发过
+
     def test_health_empty(self):
         self.assertEqual(summary([], self.now)["health"], {"login": "unknown"})
 

@@ -167,10 +167,15 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authed():
                 return self._json({"error": "未登录"}, 401)
             if url.path == "/api/summary":
+                try:
+                    planned = datetime.fromisoformat((LOGS / "planned_run").read_text().strip())
+                except (OSError, ValueError):
+                    planned = None
                 out = summary(
                     load_runs(LOGS / "runs.jsonl"), datetime.now().astimezone(),
                     cfg_int("CRON_HOUR", 8), cfg_int("CRON_MINUTE", 0),
                     cfg_int("CRON_SECOND", 0), cfg_int("CRON_RANDOM_WINDOW_SECONDS", 0),
+                    planned,
                 )
                 # 控制台和任务在同一个容器里，进程运行多久 ≈ 容器运行多久
                 out["health"]["uptime"] = int(time.time() - STARTED)

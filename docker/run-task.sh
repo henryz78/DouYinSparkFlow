@@ -14,6 +14,8 @@ if [[ "${MANUAL_RUN:-}" != "1" ]]; then
   if [[ "${CRON_RANDOM_WINDOW_SECONDS:-0}" -gt 0 ]]; then
     delay=$(( (RANDOM * 32768 + RANDOM) % (CRON_RANDOM_WINDOW_SECONDS + 1) ))
     echo "[docker] $(date '+%Y-%m-%d %H:%M:%S') random delay ${delay}s (window ${CRON_RANDOM_WINDOW_SECONDS}s)"
+    # 把"今天随机到的发送时间"写给控制台显示
+    date -d "@$(( $(date +%s) + delay ))" -Iseconds > /app/logs/planned_run || true
     sleep "$delay"
   fi
   # 延迟之后再判断：等待期间若已手动成功运行过，就不重复发送
