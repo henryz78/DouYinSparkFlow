@@ -11,7 +11,22 @@ from core.ai.config import AIConfig
 from core.ai.engine import ReplyEngine
 from core.ai.providers import create_provider
 from core.session_store import SessionStore, capture_state
-from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, norm
+from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, JS_COLLECT, norm
+
+# 平时只读会话列表（不点开会话）；列表上出现未读角标或最后一条消息变了才切过去读。
+# 另外每隔这么久对每个会话巡检一次：正在打开的会话没有未读角标，重复内容也看不出变化。
+SWEEP_SECONDS = 90
+
+
+def passive_rows(page):
+    """读会话列表（纯 DOM 读取，不点击、不切换会话）。读不到返回 None，调用方退回逐个切换。"""
+    try:
+        rows = page.evaluate(JS_COLLECT)
+    except Exception:
+        return None
+    if not isinstance(rows, list) or not rows:
+        return None
+    return {str(r["convId"]): r for r in rows if isinstance(r, dict) and r.get("convId")}
 
 
 def resolve_targets(im, targets, stop):
@@ -92,12 +107,15 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
             engine.seed(str(hit['conv_id']), im.read_chat_messages(str(hit['conv_id']), include_media=True))
         emit("status", f"{name}：已监听 {len(hits)} 个会话（含 {sum(bool(h.get('is_group')) for h in hits)} 个群聊），回复监听就绪后的新文字、emoji、表情及视频分享消息")
         unavailable_cycles = 0
+        last_desc = {}    # 会话 → 上次处理时列表里的"最后一条消息"文字
+        next_sweep = {}   # 会话 → 下次强制巡检的时间
         while not stop.is_set():
             # READY is cached by the IM client. A later page navigation or
             # disappearing chat root must not leave the worker alive forever.
             dom = page.evaluate(JS_LOGIN_DOM)
             page_missing = isinstance(dom, dict) and not dom.get("hasChatRoot")
             selected_count = 0
+            rows = None if page_missing else passive_rows(page)
             for hit in hits:
                 if stop.is_set():
                     break
@@ -106,9 +124,18 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                 cid = str(hit["conv_id"])
                 if not im.ready:
                     raise ValueError(f"{name} 登录已失效，请刷新登录信息")
+                row = rows.get(cid) if rows is not None else None
+                if rows is not None:
+                    changed = row is not None and (row.get("unread") or row.get("desc") != last_desc.get(cid))
+                    if not changed and time.monotonic() < next_sweep.get(cid, 0):
+                        selected_count += 1  # 列表读得到、没有新动静：页面是健康的，不用切会话
+                        continue
                 if not im.select_conversation(hit["conv_id"]):
                     continue
                 selected_count += 1
+                next_sweep[cid] = time.monotonic() + SWEEP_SECONDS
+                if row is not None:
+                    last_desc[cid] = row.get("desc")
                 page.wait_for_timeout(600)
                 pending = engine.prepare(cid, im.read_chat_messages(cid, include_media=True), is_group=bool(hit.get("is_group")))
                 if pending is None:
