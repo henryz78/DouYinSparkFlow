@@ -402,6 +402,77 @@ JS_MSG_STATE = """(() => {
 # 三、protobuf 最小解码（Python 原生大整数，不存在 JS 的 2^53 精度坑）
 # ===========================================================================
 
+JS_CHAT_MESSAGES = """(identity) => {
+  const convId = typeof identity === 'string' ? identity : identity.conv_id;
+  const selfUid = typeof identity === 'string' ? '' : String(identity.self_uid || '');
+  const includeMedia = typeof identity === 'object' && !!identity.include_media;
+  const clean = value => typeof value === 'string' ? value.trim().slice(0, 500) : '';
+  const mediaText = (content, el) => {
+    if (!includeMedia || !content || typeof content !== 'object') return '';
+    const video = content.aweme || content.video || {};
+    const card = el.querySelector('a[href*="/video/"], a[href*="/share/video/"]');
+    if (content.aweme_id || content.awemeId || content.itemId || content.item_id ||
+        video.aweme_id || video.awemeId || card) {
+      // 实际分享卡片的描述在 content_title，评论分享在 aweme_title；content_name 是作者。
+      const title = clean(content.content_title) || clean(content.aweme_title) ||
+                    clean(content.title) || clean(content.desc) || clean(content.aweme_name) ||
+                    clean(video.content_title) || clean(video.aweme_title) ||
+                    clean(video.title) || clean(video.desc) || (card ? clean(card.textContent) : '');
+      return '[对方分享了视频' + (title ? '，标题/描述：' + title : '') + '；未观看视频内容]';
+    }
+    const emoji = clean(content.emoji);
+    const sticker = content.sticker || content.emoticon || {};
+    const label = clean(content.display_name) || clean(content.sticker_name) ||
+                  clean(sticker.display_name) || clean(sticker.name) || clean(content.alt);
+    if (emoji || content.sticker_id || content.stickerId || content.sticker || content.emoticon) {
+      return '[对方发送了表情' + (emoji || label ? '：' + (emoji || label) : '') + '；未识别图像内容]';
+    }
+    // 无名称的表情/图片仍可触发自然回应，不把资源链接交给模型或假装看到了图像。
+    if (content.resource_url || content.url || content.url_list || content.image || content.image_url ||
+        el.querySelector('img')) {
+      const img = el.querySelector('img');
+      const alt = label || (img ? clean(img.alt) : '');
+      return '[对方发送了表情或图片' + (alt ? '，标签：' + alt : '') + '；未识别图像内容]';
+    }
+    return '';
+  };
+  const seen = new Set();
+  const result = [];
+  for (const el of document.querySelectorAll('[data-e2e="msg-item-content"]')) {
+    const key = Object.keys(el).find(k => k.startsWith('__reactFiber'));
+    let fiber = key ? el[key] : null;
+    let msg = null;
+    for (let i = 0; fiber && i < 20; i++, fiber = fiber.return) {
+      const m = fiber.memoizedProps && fiber.memoizedProps.message;
+      if (m && m.serverId && m.createdAt) { msg = m; break; }
+    }
+    if (!msg) continue;
+    try {
+      // 必须有会话身份，避免切换会话时残留的上一屏消息串入上下文。
+      if (String(msg.conversationId) !== convId) continue;
+      const id = String(msg.serverId);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const content = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+      const plainText = content && content.text;
+      const text = (typeof plainText === 'string' && plainText.trim()) || mediaText(content, el);
+      if (!text) continue;
+      const timestamp = new Date(msg.createdAt).getTime() / 1000;
+      if (!Number.isFinite(timestamp) || timestamp <= 0) continue;
+      // DOM 发送方标记补充模型判断，避免把自己发的消息再次交给 AI。
+      const sender = msg.sender;
+      // isMyMessage can be true even for incoming messages in Douyin's view model.
+      const fromMe = selfUid && typeof sender === 'string' && sender
+        ? sender === selfUid : !!el.closest('.MessageBoxContentisFromMe');
+      const order = String(msg.orderInConversation ?? msg.indexInConversation ?? '');
+      result.push({id, text: text.trim(), created_at: timestamp, from_me: fromMe,
+                   sender_id: typeof sender === 'string' ? sender : '',
+                   order: /^\\d+$/.test(order) ? order : ''});
+    } catch (_) { /* 未识别的媒体/系统消息跳过 */ }
+  }
+  return result.sort((a, b) => a.created_at - b.created_at);
+}"""
+
 SERVICE_NAMES = {
     100: "SEND_MESSAGE", 301: "GET_BY_CONVERSATION", 605: "PARTICIPANTS_LIST",
     610: "GET_CONVERSATION_INFO_LIST", 1001: "GET_STRANGER_LIST",
@@ -1806,7 +1877,42 @@ class DouyinIM:
 
     # ---------------------------------------------------- 对外：输入发送
 
-    def type_and_send(self, hit, text, wait_receipt=True, timeout=20.0):
+    def type_and_send(self, hit, text, wait_receipt=True, timeout=20.0, log_content=True):
+        """Return delivery_state and safe_to_retry as well as the legacy ok field.
+
+        Once a send action starts, missing receipts or browser errors do not
+        prove non-delivery. Only failures before that boundary may be retried.
+        """
+        if not hit:
+            raise ValueError("hit is None")
+        if not text:
+            raise ValueError("text is empty")
+        send_attempted = False
+
+        def before_send():
+            nonlocal send_attempted
+            send_attempted = True
+
+        try:
+            result = self._type_and_send(hit, text, wait_receipt, timeout, before_send, log_content)
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "conv_id": hit.get("conv_id"),
+                "display": hit.get("display"),
+                "reason": f"发送异常：{_brief(exc)}",
+            }
+        confirmed = bool(result.get("ok") and wait_receipt)
+        result["ok"] = confirmed
+        result["delivery_state"] = (
+            "confirmed" if confirmed else "uncertain" if send_attempted else "not_sent"
+        )
+        result["safe_to_retry"] = not confirmed and not send_attempted
+        if result["delivery_state"] == "uncertain":
+            result.setdefault("reason", "已尝试发送但结果无法确认；为避免重复，不自动重试")
+        return result
+
+    def _type_and_send(self, hit, text, wait_receipt, timeout, before_send, log_content):
         """给「已选中」的会话输入并发送。
 
         输入走真实键盘事件（Draft.js 依赖 beforeinput/keydown 序列更新 EditorState，
@@ -1836,7 +1942,7 @@ class DouyinIM:
         # ② 输入。用 contenteditable 本体，humanize 的「可编辑」检查能过
         # 两种换行都认（口径见 split_message_lines 的文档）
         lines = split_message_lines(text)
-        if text != "\n".join(lines):
+        if log_content and text != "\n".join(lines):
             logger.debug(f"[SEND] 换行归一：{text!r} → {lines!r}")
         if self._input_mode() == "synth":
             ready = False
@@ -1869,9 +1975,11 @@ class DouyinIM:
             logger.debug(f"[SEND] 合成输入={steps}  已键入={typed}/{want_len}  输入框为空={empty_now}")
             if typed < want_len:
                 logger.warning(f"[SEND] ⚠️ 合成输入缺行：已键入 {typed} 字，应为 {want_len} 字"
-                               f"（lines={lines}）")
+                               + (f"（lines={lines}）" if log_content else ""))
                 if typed == 0:
                     raise RuntimeError("合成输入一行都没进去，拒绝发送空消息")
+                if not log_content:
+                    raise RuntimeError("AI 回复输入不完整，已取消发送")
         else:
             editor = self._editor()
             if editor is None:
@@ -1887,6 +1995,7 @@ class DouyinIM:
         msg_before = self._msg_state()
 
         # ③ 发送：按钮优先（有内容时变红可点），退化到回车
+        before_send()
         how = self._js_click_send() if self._input_mode() == 'synth' else self._click_send()
         logger.debug(f"[SEND] 发送方式={how}  conv_id={hit.get('conv_id')}")
 
@@ -1919,8 +2028,35 @@ class DouyinIM:
     def send_native_sticker(self, hit, sticker_name="续火花", wait_receipt=True, timeout=20.0):
         """给「已选中」的会话发一张原生贴纸（点贴纸本身即发送，不再点发送键）。
 
-        返回结构与 type_and_send 一致。
+        返回结构与 type_and_send 一致（含 delivery_state / safe_to_retry）：
+        点击贴纸之后拿不到回执只算「待确认」，不自动重发。
         """
+        if not hit:
+            raise ValueError("hit is None")
+        clicked = False
+
+        def before_click():
+            nonlocal clicked
+            clicked = True
+
+        try:
+            result = self._send_native_sticker(hit, sticker_name, wait_receipt, timeout, before_click)
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "conv_id": hit.get("conv_id"),
+                "display": hit.get("display"),
+                "reason": f"发送异常：{_brief(exc)}",
+            }
+        confirmed = bool(result.get("ok") and wait_receipt)
+        result["ok"] = confirmed
+        result["delivery_state"] = "confirmed" if confirmed else "uncertain" if clicked else "not_sent"
+        result["safe_to_retry"] = not confirmed and not clicked
+        if result["delivery_state"] == "uncertain":
+            result.setdefault("reason", "已点击贴纸但结果无法确认；为避免重复，不自动重试")
+        return result
+
+    def _send_native_sticker(self, hit, sticker_name, wait_receipt, timeout, before_click):
         if not hit:
             raise ValueError("hit is None")
         name = norm(sticker_name)
@@ -1970,6 +2106,7 @@ class DouyinIM:
 
         sends_before = len(self.mon.sends)
         msg_before = self._msg_state()
+        before_click()
         if not self.page.evaluate(JS_STICKER_ACTION, {"raw": raw, "fire": True}).get("fired"):
             raise RuntimeError(f"贴纸 {name} 点击未触发")
 
@@ -1996,6 +2133,29 @@ class DouyinIM:
             "display": hit.get("display"),
         }
 
+    def select_conversation(self, conv_id):
+        """按固定会话 ID 选择，供陪聊轮询使用，绝不按模糊昵称发送。"""
+        if str((self._current_conv() or {}).get("convId")) == str(conv_id):
+            return True
+        for item in self._read_window() or []:
+            if item.get("conv_id") == conv_id:
+                return self._select_and_verify(item)
+        for rows in self._walk():
+            # _walk only yields previously unseen conversations; polling also
+            # needs the visible window when all conversations are cached.
+            for item in self._read_window() or rows:
+                if str(item.get("conv_id")) == str(conv_id):
+                    return self._select_and_verify(item)
+        return False
+
+    def read_chat_messages(self, conv_id, include_media=False):
+        """读取当前渲染消息；陪聊可启用媒体摘要，默认保持文字导出范围。"""
+        if str((self._current_conv() or {}).get("convId")) != str(conv_id):
+            return []
+        return self.page.evaluate(JS_CHAT_MESSAGES, {"conv_id": str(conv_id),
+                                  "self_uid": str(self.self_uid or ""),
+                                  "include_media": include_media}) or []
+
     def _editor(self):
         for sel in ('[data-e2e="msg-input"] .public-DraftEditor-content',
                     '.DraftEditor-root [contenteditable="true"]',
@@ -2015,13 +2175,17 @@ class DouyinIM:
             return {}
 
     def _click_send(self):
+        ready = False
         try:
             btn = self.page.locator(SEL_SEND_BTN_READY).first
-            if btn.count() > 0 and btn.is_visible():
-                btn.click()
-                return "button"
+            ready = btn.count() > 0 and btn.is_visible()
         except Exception:
             pass
+        if ready:
+            # A failed click may already have reached the page. Do not follow
+            # it with Enter, which could submit the same message twice.
+            btn.click()
+            return "button"
         self.page.keyboard.press("Enter")
         return "enter"
 

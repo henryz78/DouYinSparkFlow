@@ -32,6 +32,7 @@
 - [x] 支持按照昵称和抖音号多种方式查找好友目标
 - [x] 一言支持,更丰富的消息文本
 - [x] 使用CloakBrowser，稳定自动化操作环境，降低被判别为机器的风险
+- [x] AI 陪聊
 
 使用`CloakBrowse`（基于PlayWright）自动化操作[抖音聊天网页版](https://www.douyin.com/chat)，进行定时发送抖音消息来续火花
 

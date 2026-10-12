@@ -25,7 +25,7 @@ function rowHtml(r) {
     <span class="state ${r.status}">${STATUS[r.status] || r.status}</span></li>`;
 }
 
-const FSTATE = { ok: "已发送", failed: "失败", missing: "未找到", select_failed: "选中失败", waiting: "等待" };
+const FSTATE = { ok: "已发送", failed: "失败", missing: "未找到", select_failed: "选中失败", uncertain: "待确认", waiting: "等待" };
 const span = (a, b) => { const s = Math.max(0, Math.round((new Date(b) - new Date(a)) / 1000)); return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`; };
 
 // 记录页的详细版：账号、方式、目标好友、结果、问题

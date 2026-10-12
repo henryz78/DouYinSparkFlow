@@ -5,7 +5,8 @@ from utils.logger import setup_logger
 from utils.config import get_config, get_userData
 from core.msg_builder import build_message
 from core.browser import get_browser
-from core.douyin_im import DouyinIM, STATUS_READY, norm
+from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, norm
+from core.session_store import SessionStore, capture_state
 from core.run_log import record_run
 
 
@@ -21,9 +22,9 @@ def method_label():
     return "文本消息"
 
 
-def do_user_task(browser, username, cookies, targets):
+def do_user_task(browser, username, cookies, targets, unique_id='', fingerprint=''):
     """一个账号的完整流程：门禁 → 滚动找人 → 发送 → 回执确认。
-    返回 (发送成功数, 问题列表, 每位好友结果)，用来写运行记录；问题列表为空才算完全成功。
+    返回结果字典；其中 problems（问题列表，空才算完全成功）和 friends（逐人结果）用来写运行记录。
 
     实现委托给 `core.douyin_im.DouyinIM`：
       任务一（门禁）    DouyinIM 构造时自动完成，结论在 wait_ready() 里
@@ -31,7 +32,9 @@ def do_user_task(browser, username, cookies, targets):
       任务三（发送）    im.type_and_send —— 真实键盘事件 + HTTP/DOM 回执双确认
     拟人化节奏由 cloakbrowser 的 humanize 负责，这里不再叠加延迟。
     """
-    context = browser.new_context()  # 每个任务使用独立的上下文
+    sessions = SessionStore(unique_id, cookies, fingerprint)
+    state = sessions.load()
+    context = browser.new_context(**({'storage_state':state} if state else {}))
     context.set_default_navigation_timeout(
         config["browserActionTimeout"]
     )  # 导航超时（毫秒，config 已换算好）
@@ -41,7 +44,8 @@ def do_user_task(browser, username, cookies, targets):
 
     page = context.new_page()
 
-    context.add_cookies(cookies)
+    if state is None:
+        context.add_cookies(cookies)
 
     sticker_mode = config["deliveryMode"] == "native_sticker"
 
@@ -73,7 +77,16 @@ def do_user_task(browser, username, cookies, targets):
                 "ERROR": "内部错误",
             }.get(res.get("status"), res.get("status"))
             logger.error(f"账号 {username} 操作前检查未通过：{reason}，跳过该账号")
-            return 0, [f"操作前检查未通过：{reason}"], []
+            return {
+                "ok": False,
+                "reason": reason,
+                "sent_ok": 0,
+                "sent_fail": 0,
+                "missing": [],
+                "note": "",
+                "problems": [f"操作前检查未通过：{reason}"],
+                "friends": [],
+            }
 
         logger.info(
             f"账号 {username} 门禁通过  user_id={res.get('user_id')} "
@@ -81,14 +94,24 @@ def do_user_task(browser, username, cookies, targets):
         )
 
         sent_ok = sent_fail = 0
+        uncertain = []
         failed = []
-        results = {}  # 好友 → ok / failed / missing / select_failed，给控制台逐人显示
+        results = {}  # 好友 → ok / failed / uncertain / missing / select_failed，给控制台逐人显示
 
         # 生成器：yield 出来的那一刻，对应好友的会话已经被选中
         for friend in im.iter_find_and_select(targets):
             logger.debug(f"账号 {username} 已选中好友 {friend['display']}，准备发送")
             message = None if sticker_mode else build_message()
             r = send(friend, message)
+            if not r["ok"] and r.get("safe_to_retry") is True:
+                logger.warning(
+                    f"账号 {username} → {friend['display']} 发送前失败，重试一次"
+                )
+                try:
+                    if friend.get("reselect") and friend["reselect"]():
+                        r = send(friend, message)
+                except Exception:
+                    logger.warning(traceback.format_exc())
             if r["ok"]:
                 sent_ok += 1
                 results[friend["display"]] = "ok"
@@ -96,27 +119,20 @@ def do_user_task(browser, username, cookies, targets):
                     f"账号 {username} → {friend['display']} 发送成功"
                     f"（{r.get('via')} message_id={r.get('message_id') or '-'}）"
                 )
+            elif r.get("delivery_state") == "uncertain":
+                uncertain.append(friend["display"])
+                results[friend["display"]] = "uncertain"
+                logger.warning(
+                    f"账号 {username} → {friend['display']} 发送结果待确认，"
+                    f"为避免重复未自动重试，请检查聊天记录：{r.get('reason') or ''}"
+                )
             else:
                 sent_fail += 1
                 failed.append(friend["display"])
                 results[friend["display"]] = "failed"
-                # 重试一次：用 conv_id 重新选中（列表可能已滚动，原来的下标失效）
                 logger.warning(
-                    f"账号 {username} → {friend['display']} 未拿到回执，重试一次"
+                    f"账号 {username} → {friend['display']} 发送失败：{r.get('reason') or ''}"
                 )
-                try:
-                    if friend.get("reselect") and friend["reselect"]():
-                        r2 = send(friend, message)
-                        if r2["ok"]:
-                            sent_ok += 1
-                            sent_fail -= 1
-                            failed.pop()
-                            results[friend["display"]] = "ok"
-                            logger.info(
-                                f"账号 {username} → {friend['display']} 重试成功"
-                            )
-                except Exception:
-                    logger.warning(traceback.format_exc())
             # 发送完让列表状态落定，再继续滚动（发送会把该会话移到顶部）
             page.wait_for_timeout(800)
 
@@ -124,7 +140,7 @@ def do_user_task(browser, username, cookies, targets):
         logger.info(
             f"账号 {username} 扫描结束：停止原因={scan.get('stopped')} "
             f"步数={scan.get('steps')} 访问会话={scan.get('visited')} "
-            f"发送成功={sent_ok} 发送失败={sent_fail}"
+            f"发送成功={sent_ok} 发送失败={sent_fail} 待确认={len(uncertain)}"
         )
         if scan.get("missing"):
             # 这两句必须区分开：scanned_all=False 时"没找到"不代表"不存在"
@@ -145,6 +161,8 @@ def do_user_task(browser, username, cookies, targets):
         problems = []
         if failed:
             problems.append(f"发送失败：{'、'.join(failed)}")
+        if uncertain:
+            problems.append(f"待确认（未自动重发）：{'、'.join(uncertain)}")
         if scan.get("missing"):
             problems.append(f"未找到：{'、'.join(map(str, scan['missing']))}")
         if scan.get("select_failed"):
@@ -156,8 +174,26 @@ def do_user_task(browser, username, cookies, targets):
                 f"账号 {username} 注意：折叠组/陌生人组里有内容 {folds}，"
                 f"主列表扫不到，目标可能被折叠"
             )
-        return sent_ok, problems, [{"name": n, "status": s} for n, s in results.items()]
+        return {
+            "ok": True,
+            "reason": "",
+            "sent_ok": sent_ok,
+            "sent_fail": sent_fail,
+            "sent_uncertain": len(uncertain),
+            "uncertain": uncertain,
+            "missing": list(scan.get("missing") or []),
+            "note": scan.get("note") or "",
+            "problems": problems,
+            "friends": [{"name": n, "status": st} for n, st in results.items()],
+        }
     finally:
+        if im is not None and im.ready:
+            try:
+                dom = page.evaluate(JS_LOGIN_DOM)
+                if dom.get('hasChatRoot') and not dom.get('loginVisible'):
+                    sessions.save(capture_state(context))
+            except Exception:
+                logger.warning('登录状态保存失败，请检查数据目录权限')
         if im is not None:
             try:
                 im.detach()
@@ -199,28 +235,44 @@ def runTasks():
         browser = None
         try:
             browser = get_browser(fingerprint)
-            sent_ok, problems, friends = do_user_task(browser, username, cookies, targets)
-            logger.info(f"账号 {username} 任务完成")
+            result = do_user_task(browser, username, cookies, targets,
+                                  user.get('unique_id', ''), fingerprint or '')
+            if result.get("ok"):
+                logger.info(f"账号 {username} 任务完成")
+            else:
+                logger.error(f"账号 {username} 任务失败")
         except Exception as exc:
             logger.error(f"账号 {username} 任务异常：\n{traceback.format_exc()}")
-            sent_ok, problems, friends = None, [f"{type(exc).__name__}: {exc}"[:300]], []
+            result = {
+                "ok": False,
+                "reason": "任务异常",
+                "sent_ok": None,
+                "sent_fail": 0,
+                "missing": [],
+                "note": "",
+                "problems": [f"{type(exc).__name__}: {exc}"[:300]],
+                "friends": [],
+            }
         finally:
             if browser is not None:
                 try:
                     browser.close()
                 except Exception:
                     logger.warning(traceback.format_exc())
-        friends = [{"name": canon.get(norm(f["name"]), f["name"]), "status": f["status"]} for f in friends]
+        friends = [{"name": canon.get(norm(f["name"]), f["name"]), "status": f["status"]}
+                   for f in result.get("friends") or []]
+        problems = result.get("problems") or []
+        sent_ok = result["sent_ok"]
         record_run(logger, username, shown, sent_ok, problems, started, friends, method_label())
         # 一个账号出错不拖累后面的账号；整体失败 = 异常，或一条都没发出去（含门禁未通过）
         ok = sent_ok is not None and (sent_ok > 0 or not problems)
         if not ok:
             failed += 1
         results.append((username, {
+            **result,
             "ok": ok,
-            "reason": "；".join(problems),
             "sent_ok": sent_ok or 0,
-            "sent_fail": sum(f["status"] in ("failed", "select_failed") for f in friends),
+            "reason": "；".join(problems),
             "missing": [f["name"] for f in friends if f["status"] == "missing"],
         }))
 
@@ -244,22 +296,28 @@ def _notify_summary(results: list, failed: int) -> None:
 
     total_ok = sum(int(r.get("sent_ok") or 0) for _, r in results)
     total_fail = sum(int(r.get("sent_fail") or 0) for _, r in results)
+    total_uncertain = sum(int(r.get("sent_uncertain") or 0) for _, r in results)
 
     lines = [f"抖音火花续期 · {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
     for username, r in results:
         if r.get("ok"):
-            line = f"✅ {username}：发送成功 {int(r.get('sent_ok') or 0)}"
+            mark = "⚠️" if r.get("sent_uncertain") else "✅"
+            line = f"{mark} {username}：发送成功 {int(r.get('sent_ok') or 0)}"
             if r.get("sent_fail"):
                 line += f"，失败 {int(r['sent_fail'])}"
+            if r.get("sent_uncertain"):
+                line += f"，待确认 {int(r['sent_uncertain'])}"
         else:
             line = f"❌ {username}：{r.get('reason') or '任务失败'}"
         lines.append(line)
+        if r.get("uncertain"):
+            lines.append(f"　待确认：{'、'.join(str(x) for x in r['uncertain'])}；请检查聊天记录，未自动重发")
         if r.get("missing"):
             lines.append(f"　未找到：{'、'.join(str(x) for x in r['missing'])}")
     lines.append("————————————")
     lines.append(
         f"本轮：{len(results) - failed}/{len(results)} 个账号成功，"
-        f"共发送 {total_ok} 条，失败 {total_fail} 条"
+        f"共确认发送 {total_ok} 条，失败 {total_fail} 条，待确认 {total_uncertain} 条"
     )
 
     try:
