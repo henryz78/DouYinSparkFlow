@@ -139,33 +139,39 @@ chips("log-filter", (f) => { logFilter = f; drawLogs(); });
 
 // ---- 配置页：字段由后端 /api/config 描述，这里只负责渲染和提交变更的部分 ----
 let cfgLoaded = null;
-const GROUPS = { time: "发送时间", content: "发送内容" };
 const ENUM = { text: "文本消息", native_sticker: "原生贴纸" };
 const attr = (s) => esc(s).replace(/'/g, "&#39;");
 
+// 控件完全由后端给的字段描述决定：type / range / scale+unit（换算单位）/ widget / row（同一行）
 function fieldHtml(f) {
-  const id = "f-" + f.key;
+  const id = "f-" + f.key, hint = f.hint ? `<p class="small">${esc(f.hint)}</p>` : "", err = `<p class="small error" data-err="${f.key}"></p>`;
   if (f.type === "bool") return `<label class="switch"><input type="checkbox" id="${id}" ${f.value ? "checked" : ""}>${f.label}</label>`;
-  if (f.type === "enum") return `<div class="field"><label for="${id}">${f.label}</label><select class="input" id="${id}">${f.range.map((o) => `<option value="${o}" ${o === f.value ? "selected" : ""}>${ENUM[o] || o}</option>`).join("")}</select></div>`;
+  if (f.type === "enum") return `<div class="field"><label for="${id}">${f.label}</label><select class="input" id="${id}">${f.range.map((o) => `<option value="${o}" ${o === f.value ? "selected" : ""}>${ENUM[o] || o}</option>`).join("")}</select>${hint}${err}</div>`;
   if (f.type === "int") {
-    const minutes = f.key === "CRON_RANDOM_WINDOW_SECONDS";
-    const [lo, hi] = minutes ? [0, f.range[1] / 60] : f.range;
-    return `<div class="field"><label for="${id}">${minutes ? "随机窗口（分钟）" : f.label}</label><input class="input" type="number" id="${id}" min="${lo}" max="${hi}" value="${minutes ? Math.round(f.value / 60) : Number(f.value)}">${f.hint && !minutes ? `<p class="small">${f.hint}</p>` : minutes ? '<p class="small">到点后再随机等 0 到这么多分钟才发送，0 表示不随机</p>' : ""}<p class="small error" data-err="${f.key}"></p></div>`;
+    const k = f.scale || 1, [lo, hi] = f.range;
+    return `<div class="field"><label for="${id}">${f.label}${f.unit ? `（${f.unit}）` : ""}</label><input class="input" type="number" id="${id}" min="${lo / k}" max="${hi / k}" value="${Math.round(Number(f.value) / k)}">${hint}${err}</div>`;
   }
-  return `<div class="field"><label for="${id}">${f.label}</label>${f.key === "MESSAGE_TEMPLATE" ? `<textarea class="input" id="${id}" rows="3">${esc(f.value)}</textarea>` : `<input class="input" id="${id}" value="${attr(f.value)}">`}${f.hint ? `<p class="small">${esc(f.hint)}</p>` : ""}<p class="small error" data-err="${f.key}"></p></div>`;
+  return `<div class="field"><label for="${id}">${f.label}</label>${f.widget === "textarea" ? `<textarea class="input" id="${id}" rows="3">${esc(f.value)}</textarea>` : `<input class="input" id="${id}" value="${attr(f.value)}">`}${hint}${err}</div>`;
+}
+
+// 同一个 row 的相邻字段排成一行，其余各占一行
+function groupHtml(fields) {
+  const out = [];
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    if (!f.row) { out.push(fieldHtml(f)); continue; }
+    const same = [f];
+    while (fields[i + 1] && fields[i + 1].row === f.row) same.push(fields[++i]);
+    out.push(`<div class="row3">${same.map(fieldHtml).join("")}</div>`);
+  }
+  return out.join("");
 }
 
 async function loadConfig() {
   const c = await get("/api/config");
   cfgLoaded = c;
-  const by = (g) => c.fields.filter((f) => f.group === g);
-  const time = by("time"), hms = time.slice(0, 3);
-  $("cfg-form").innerHTML = `
-    <fieldset><legend>${GROUPS.time}</legend>
-      <div class="row3">${hms.map(fieldHtml).join("")}</div>
-      <p class="small" style="margin:6px 0 20px">每天这个时刻触发，再叠加下面的随机窗口。</p>
-      ${time.slice(3).map(fieldHtml).join("")}</fieldset>
-    <fieldset><legend>${GROUPS.content}</legend>${by("content").map(fieldHtml).join("")}</fieldset>
+  const groups = c.groups.map((g) => `<fieldset><legend>${esc(g.label)}</legend>${g.note ? `<p class="small" style="margin:0 0 20px">${esc(g.note)}</p>` : ""}${groupHtml(c.fields.filter((f) => f.group === g.id))}</fieldset>`).join("");
+  $("cfg-form").innerHTML = groups + `
     <fieldset><legend>好友名单</legend>${c.accounts.map((a) => `<div class="field acct"><label for="acct-${a.id}">${esc(a.name)}（每行一位好友）</label><textarea class="input" id="acct-${a.id}" rows="${Math.max(3, a.targets.length + 1)}">${esc(a.targets.join("\n"))}</textarea><p class="small error" data-err="account-${a.id}"></p></div>`).join("") || '<p class="small">没有账号。</p>'}</fieldset>
     <div class="savebar"><button class="btn primary" type="submit">保存并生效</button><span class="small" id="cfg-msg"></span></div>`;
 }
@@ -176,8 +182,7 @@ $("cfg-form").addEventListener("submit", async (e) => {
   const values = {}, targets = {};
   for (const f of cfgLoaded.fields) {
     const el = $("f-" + f.key);
-    let v = f.type === "bool" ? el.checked : f.type === "int" ? Number(el.value) : el.value;
-    if (f.key === "CRON_RANDOM_WINDOW_SECONDS") v = Math.round(v * 60);
+    let v = f.type === "bool" ? el.checked : f.type === "int" ? Math.round(Number(el.value) * (f.scale || 1)) : el.value;
     const old = f.type === "int" ? Number(f.value) : f.value;
     if (v !== old) values[f.key] = v;  // 只提交改过的项，没动的原样保留
   }

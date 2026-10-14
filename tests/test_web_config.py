@@ -32,6 +32,27 @@ class ConfigEditTests(unittest.TestCase):
         keys = {f["key"] for f in config_edit.read(self.env)["fields"]}
         self.assertFalse(keys & {"NOTIFY", "DASH_PASSWORD_HASH", "TASKS"})
 
+    def test_page_is_described_by_data(self):
+        data = config_edit.read(self.env)
+        groups = {g["id"] for g in data["groups"]}
+        self.assertTrue(groups >= {"time", "content", "advanced"})
+        self.assertTrue(all(f["group"] in groups for f in data["fields"]))  # 每个字段都有分组
+        by = {f["key"]: f for f in data["fields"]}
+        self.assertEqual((by["CRON_RANDOM_WINDOW_SECONDS"]["scale"], by["CRON_RANDOM_WINDOW_SECONDS"]["unit"]), (60, "分钟"))
+        self.assertEqual(by["MESSAGE_TEMPLATE"]["widget"], "textarea")
+        self.assertEqual({by[k]["row"] for k in ("CRON_HOUR", "CRON_MINUTE", "CRON_SECOND")}, {"hms"})
+        self.assertNotIn("default", by["CRON_HOUR"])
+
+    def test_advanced_fields_have_defaults_and_validate(self):
+        data = config_edit.read(self.env)
+        val = {f["key"]: f["value"] for f in data["fields"]}
+        self.assertEqual((val["LOG_LEVEL"], val["TASK_RETRY_TIMES"], val["IM_MAX_STEPS"]), ("Debug", "3", "200"))
+        v = config_edit.validate
+        self.assertEqual(v({"LOG_LEVEL": "Info", "IM_SCAN_TIMEOUT": 300, "TASK_RETRY_TIMES": 0}, {}), {})
+        self.assertIn("LOG_LEVEL", v({"LOG_LEVEL": "Verbose"}, {}))
+        self.assertIn("IM_MAX_STEPS", v({"IM_MAX_STEPS": 5}, {}))
+        self.assertIn("BROWSER_ACTION_TIMEOUT", v({"BROWSER_ACTION_TIMEOUT": 601}, {}))
+
     def test_read_defaults_and_accounts(self):
         data = config_edit.read(self.env)
         val = {f["key"]: f["value"] for f in data["fields"]}

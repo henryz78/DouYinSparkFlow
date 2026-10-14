@@ -12,17 +12,41 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-# (键, 类型, 分组, 标签, 提示, 取值范围/选项, 默认值)
-FIELDS = [
-    ("CRON_HOUR", "int", "time", "小时", "", (0, 23), "9"),
-    ("CRON_MINUTE", "int", "time", "分钟", "", (0, 59), "0"),
-    ("CRON_SECOND", "int", "time", "秒", "", (0, 59), "0"),
-    ("CRON_RANDOM_WINDOW_SECONDS", "int", "time", "随机窗口（秒）", "到点后再随机等 0 到这么多秒才发送，0 表示不随机", (0, 86400), "0"),
-    ("DELIVERY_MODE", "enum", "content", "发送方式", "", ("text", "native_sticker"), "text"),
-    ("NATIVE_STICKER_NAME", "str", "content", "贴纸名称", "原生贴纸方式下要点的表情包名字", (1, 30), "续火花"),
-    ("MESSAGE_TEMPLATE", "str", "content", "文本模板", "文本方式用；\\n 表示换行，[API] 替换为一言", (1, 500), ""),
+# 配置页完全由这里描述：前端按 GROUPS 分组、按字段的 type 画控件，不写死任何键。
+# 以后想在页面上多开放一项，只要在 FIELDS 里加一行（放进已有分组，或在 GROUPS 里加新分组）。
+GROUPS = [
+    {"id": "time", "label": "发送时间", "note": "每天这个时刻触发，再叠加下面的随机窗口。"},
+    {"id": "content", "label": "发送内容", "note": ""},
+    {"id": "advanced", "label": "高级（一般不用改）", "note": "下一次运行时生效。"},
 ]
-BY_KEY = {f[0]: f for f in FIELDS}
+
+
+def _f(key, typ, group, label, default, rng, hint="", **ui):
+    """ui 可选：row=同一行显示的组名；scale/unit=页面按这个倍数换算成更大的单位显示；widget=textarea。"""
+    return {"key": key, "type": typ, "group": group, "label": label, "hint": hint,
+            "range": rng, "default": default, **ui}
+
+
+FIELDS = [
+    _f("CRON_HOUR", "int", "time", "小时", "9", (0, 23), row="hms"),
+    _f("CRON_MINUTE", "int", "time", "分钟", "0", (0, 59), row="hms"),
+    _f("CRON_SECOND", "int", "time", "秒", "0", (0, 59), row="hms"),
+    _f("CRON_RANDOM_WINDOW_SECONDS", "int", "time", "随机窗口", "0", (0, 86400),
+       "到点后再随机等 0 到这么多分钟才发送，0 表示不随机", scale=60, unit="分钟"),
+    _f("DELIVERY_MODE", "enum", "content", "发送方式", "text", ("text", "native_sticker")),
+    _f("NATIVE_STICKER_NAME", "str", "content", "贴纸名称", "续火花", (1, 30), "原生贴纸方式下要点的表情包名字"),
+    _f("MESSAGE_TEMPLATE", "str", "content", "文本模板", "", (1, 500),
+       "文本方式用；\\n 表示换行，[API] 替换为一言", widget="textarea"),
+    _f("TASK_RETRY_TIMES", "int", "advanced", "任务失败重试次数", "3", (0, 10)),
+    _f("LOG_LEVEL", "enum", "advanced", "日志级别", "Debug", ("Debug", "Info", "Warning", "Error")),
+    _f("BROWSER_ACTION_TIMEOUT", "int", "advanced", "浏览器单步超时（秒）", "120", (10, 600)),
+    _f("IM_READY_TIMEOUT", "int", "advanced", "等聊天页就绪的上限（秒）", "120", (10, 600)),
+    _f("IM_SCAN_TIMEOUT", "int", "advanced", "滚动找好友的总时限（秒）", "120", (10, 1800)),
+    _f("IM_MAX_STEPS", "int", "advanced", "滚动步数上限", "200", (10, 2000)),
+    _f("FRIEND_LIST_WAIT_TIME", "int", "advanced", "好友资料静默等待（秒）", "3", (1, 30),
+       "调大会明显拖慢找好友"),
+]
+BY_KEY = {f["key"]: f for f in FIELDS}
 MAX_TARGETS = 50
 
 
@@ -30,14 +54,13 @@ def read(path):
     """当前值 + 各账号的好友名单。"""
     raw = dotenv_values(path) if Path(path).exists() else {}
     fields = []
-    for key, typ, group, label, hint, rng, default in FIELDS:
-        value = raw.get(key)
-        value = default if value is None else value
-        fields.append({
-            "key": key, "type": typ, "group": group, "label": label, "hint": hint,
-            "range": list(rng) if rng else None,
-            "value": value.lower() == "true" if typ == "bool" else value,
-        })
+    for f in FIELDS:
+        value = raw.get(f["key"])
+        value = f["default"] if value is None else value
+        item = {k: v for k, v in f.items() if k != "default"}
+        item["range"] = list(f["range"]) if f["range"] else None
+        item["value"] = value.lower() == "true" if f["type"] == "bool" else value
+        fields.append(item)
     accounts = []
     for i, task in enumerate(_tasks(raw)):
         accounts.append({
@@ -45,7 +68,7 @@ def read(path):
             "name": task.get("username") or task.get("unique_id") or f"账号{i + 1}",
             "targets": list(task.get("targets", [])),
         })
-    return {"fields": fields, "accounts": accounts}
+    return {"groups": GROUPS, "fields": fields, "accounts": accounts}
 
 
 def _tasks(raw):
@@ -63,7 +86,7 @@ def validate(values, targets):
         if key not in BY_KEY:
             errors[key] = "不是可修改的配置项"
             continue
-        _, typ, _, _, _, rng, _ = BY_KEY[key]
+        typ, rng = BY_KEY[key]["type"], BY_KEY[key]["range"]
         if typ == "int":
             if not isinstance(value, int) or isinstance(value, bool) or not rng[0] <= value <= rng[1]:
                 errors[key] = f"需要 {rng[0]} 到 {rng[1]} 之间的整数"

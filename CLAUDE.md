@@ -37,6 +37,8 @@ Whenever the user says upstream has released a new version, Claude does the merg
 - **Personal web console**: `web/` (stdlib server, single password, self-signed HTTPS on
   port 8443, manual run, config editing, live logs). Started by `docker/entrypoint-cron.sh`
   only when `DASH_PASSWORD_HASH` is set. Config edits apply live via `docker/apply-config.sh`.
+  The config page is data-driven: `web/config_edit.py` `FIELDS`/`GROUPS` describe it and `app.js` renders
+  whatever it gets, so exposing a new upstream setting is one line in `FIELDS`.
 - **AI chat** (upstream feature, `core/ai/`): `docker/entrypoint-cron.sh` starts `main.py chat` under a
   restart loop when any account has `ai_targets`. `core/ai/runner.py` reads the conversation list passively
   and only opens a chat when it shows unread or a changed last message (plus a 90 s sweep).
