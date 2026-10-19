@@ -41,7 +41,8 @@ Whenever the user says upstream has released a new version, Claude does the merg
   whatever it gets, so exposing a new upstream setting is one line in `FIELDS`.
 - **AI chat** (upstream feature, `core/ai/`): `docker/entrypoint-cron.sh` starts `main.py chat` under a
   restart loop when any account has `ai_targets`. `core/ai/runner.py` reads the conversation list passively
-  and only opens a chat when it shows unread or a changed last message (plus a 90 s sweep).
+  and only opens a chat when it shows unread or a new last-message id (`lastKey`, added to `JS_COLLECT`),
+  or when a skipped reply (cooldown, API failure) is due again. Only conversations without an id fall back to text plus a 90 s sweep.
 - **`core/tasks.py`**: merged with upstream's exit code and per-account isolation; we keep
   the run record and per-friend results.
 - **Desktop app** (`app/`): our extra settings live in `app/config/models.py`;

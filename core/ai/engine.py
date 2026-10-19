@@ -76,6 +76,11 @@ class ReplyEngine:
                             "\n".join(texts)[-8000:],
                             incoming[-1]["created_at"], is_group)
 
+    def blocked_until(self, conv_id):
+        """冷却或失败退避的结束时间（墙钟）；没有被挡住返回 0。"""
+        return max(self.retry_after.get(conv_id, 0),
+                   self.last_reply.get(conv_id, 0) + self.config.cooldown if conv_id in self.last_reply else 0)
+
     def messages(self, pending):
         prompt = self.config.system_prompt
         prompt += ("\n带有‘未观看视频内容’或‘未识别图像内容’的消息是媒体摘要，"

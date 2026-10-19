@@ -197,6 +197,9 @@ JS_COLLECT = """(() => {
       isCurrent: has(el, '.conversationConversationItemcurConversation'),
       isMuted: has(el, '.ConversationItemTagNextToTitlemuteIcon'),
       isOnline: has(el, '.ConversationItemDesconlineStatus'),
+      // 最后一条消息的服务端 id：每条都不同，文字相同的重复消息也能分辨。
+      lastKey: conv && conv.lastMessage ? safe(() => String(conv.lastMessage.serverId || '')) || null : null,
+      lastFromMe: conv && conv.lastMessage ? !!conv.lastMessage.isFromMe : null,
       fromFiber: !!conv,
     };
   });

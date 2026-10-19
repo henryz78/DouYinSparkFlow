@@ -13,8 +13,9 @@ from core.ai.providers import create_provider
 from core.session_store import SessionStore, capture_state
 from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, JS_COLLECT, norm
 
-# 平时只读会话列表（不点开会话）；列表上出现未读角标或最后一条消息变了才切过去读。
-# 另外每隔这么久对每个会话巡检一次：正在打开的会话没有未读角标，重复内容也看不出变化。
+# 平时只读会话列表（不点开会话）；列表上出现未读角标，或最后一条消息变了才切过去读。
+# “变了”优先看消息 id（lastKey），文字相同的重复消息也分得出来。
+# 只有读不到消息 id 的会话才退回按文字判断，并每隔这么久巡检一次。
 SWEEP_SECONDS = 90
 
 
@@ -107,8 +108,8 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
             engine.seed(str(hit['conv_id']), im.read_chat_messages(str(hit['conv_id']), include_media=True))
         emit("status", f"{name}：已监听 {len(hits)} 个会话（含 {sum(bool(h.get('is_group')) for h in hits)} 个群聊），回复监听就绪后的新文字、emoji、表情及视频分享消息")
         unavailable_cycles = 0
-        last_desc = {}    # 会话 → 上次处理时列表里的"最后一条消息"文字
-        next_sweep = {}   # 会话 → 下次强制巡检的时间
+        last_key = {}     # 会话 → 上次处理时列表里的"最后一条消息"（id，没有就用文字）
+        next_check = {}   # 会话 → 到点必须再读一次（monotonic）；0 表示马上读，inf 表示只在有变化时读
         while not stop.is_set():
             # READY is cached by the IM client. A later page navigation or
             # disappearing chat root must not leave the worker alive forever.
@@ -126,19 +127,28 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                     raise ValueError(f"{name} 登录已失效，请刷新登录信息")
                 row = rows.get(cid) if rows is not None else None
                 if rows is not None:
-                    changed = row is not None and (row.get("unread") or row.get("desc") != last_desc.get(cid))
-                    if not changed and time.monotonic() < next_sweep.get(cid, 0):
+                    key = (row.get("lastKey") or row.get("desc")) if row else None
+                    changed = row is not None and bool(row.get("unread") or key != last_key.get(cid))
+                    if changed and row.get("lastFromMe") and not row.get("unread"):
+                        last_key[cid] = key  # 最后一条是我们自己发的（含手动回复），没有要回的
+                        changed = False
+                    if not changed and time.monotonic() < next_check.get(cid, 0):
                         selected_count += 1  # 列表读得到、没有新动静：页面是健康的，不用切会话
                         continue
                 if not im.select_conversation(hit["conv_id"]):
                     continue
                 selected_count += 1
-                next_sweep[cid] = time.monotonic() + SWEEP_SECONDS
+                next_check[cid] = time.monotonic() + (
+                    float("inf") if row and row.get("lastKey") else SWEEP_SECONDS)
                 if row is not None:
-                    last_desc[cid] = row.get("desc")
+                    last_key[cid] = row.get("lastKey") or row.get("desc")
                 page.wait_for_timeout(600)
                 pending = engine.prepare(cid, im.read_chat_messages(cid, include_media=True), is_group=bool(hit.get("is_group")))
                 if pending is None:
+                    # 冷却中被跳过的消息：列表不会再变，到点自己回来读
+                    wait = engine.blocked_until(cid) - time.time()
+                    if wait > 0:
+                        next_check[cid] = min(next_check[cid], time.monotonic() + wait)
                     continue
                 emit("status", f"{name} → {hit['display']}：正在生成回复")
                 future = executor.submit(provider.reply, engine.messages(pending))
@@ -154,6 +164,7 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                     from core.ai.providers import ProviderError
                     message = str(exc) if isinstance(exc, ProviderError) else "AI 生成失败"
                     emit("error", f"{name}：{message}，60 秒后再试")
+                    next_check[cid] = min(next_check[cid], time.monotonic() + 60)
                     continue
                 # API 等待期间有新消息或手动回复，丢弃过时结果，下轮重新判断。
                 fresh = engine.prepare(cid, im.read_chat_messages(cid, include_media=True), is_group=bool(hit.get("is_group")))

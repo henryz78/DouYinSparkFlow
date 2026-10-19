@@ -23,7 +23,7 @@ class PassiveRowsTests(unittest.TestCase):
 
 class RunnerTests(unittest.TestCase):
     def run_cycles(self, descs):
-        """每个周期列表里的最后一条消息依次为 descs；返回 im，用来数切换会话的次数。"""
+        """每个周期列表里的最后一条消息依次为 descs（字符串，或带 lastKey/lastFromMe 的字典）；返回 im，用来数切换会话的次数。"""
         stop = threading.Event()
         cycle = {"n": 0}
         page = MagicMock()
@@ -35,8 +35,10 @@ class RunnerTests(unittest.TestCase):
                     stop.set()
                 return {"hasChatRoot": True, "loginVisible": False}
             if arg == JS_COLLECT:
-                i = min(cycle["n"], len(descs)) - 1
-                return [{"convId": "a", "desc": descs[max(i, 0)], "unread": None}]
+                d = descs[max(min(cycle["n"], len(descs)) - 1, 0)]
+                row = {"convId": "a", "desc": "hi", "unread": None}
+                row.update(d if isinstance(d, dict) else {"desc": d})
+                return [row]
         page.evaluate.side_effect = evaluate
         im = MagicMock(ready=True, last_scan={"scanned_all": True})
         im.wait_ready.return_value = {"status": "READY"}
@@ -58,6 +60,36 @@ class RunnerTests(unittest.TestCase):
     def test_changed_last_message_triggers_a_read(self):
         im = self.run_cycles(["hi", "hi", "hi", "新消息", "新消息"])
         self.assertEqual(im.select_conversation.call_count, 3)
+
+    def test_same_text_but_new_message_id_triggers_a_read(self):
+        # 文字完全一样的重复消息，靠消息 id 分辨
+        same = lambda k: {"desc": "[图片]", "lastKey": k}
+        im = self.run_cycles([same("1"), same("1"), same("1"), same("2"), same("2")])
+        self.assertEqual(im.select_conversation.call_count, 3)
+
+    def test_unchanged_message_id_is_never_swept(self):
+        same = {"desc": "hi", "lastKey": "1"}
+        im = self.run_cycles([same] * 8)
+        self.assertEqual(im.select_conversation.call_count, 2)
+
+    def test_own_last_message_is_not_read(self):
+        # 最后一条是自己发的（机器人回复或手动回复）：只记下，不点开
+        im = self.run_cycles([{"desc": "a", "lastKey": "1"}, {"desc": "a", "lastKey": "1"},
+                              {"desc": "b", "lastKey": "2", "lastFromMe": True},
+                              {"desc": "b", "lastKey": "2", "lastFromMe": True}])
+        self.assertEqual(im.select_conversation.call_count, 2)
+
+
+class BlockedUntilTests(unittest.TestCase):
+    def test_cooldown_and_backoff_report_when_to_retry(self):
+        from core.ai.engine import PendingReply, ReplyEngine
+        engine = ReplyEngine(AIConfig(cooldown=15))
+        self.assertEqual(engine.blocked_until("c"), 0)
+        pending = PendingReply("c", ("1",), "x", 0)
+        engine.commit(pending, "ok", now=1000)
+        self.assertEqual(engine.blocked_until("c"), 1015)
+        engine.failed(pending, now=1100)
+        self.assertEqual(engine.blocked_until("c"), 1160)
 
 
 if __name__ == "__main__":
