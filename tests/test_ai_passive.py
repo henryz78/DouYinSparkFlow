@@ -92,5 +92,16 @@ class BlockedUntilTests(unittest.TestCase):
         self.assertEqual(engine.blocked_until("c"), 1160)
 
 
+class EchoTests(unittest.TestCase):
+    def test_echo_detection(self):
+        from core.ai.engine import echoes
+        self.assertTrue(echoes("这个ai好废物啊", "这个ai好废物啊"))
+        self.assertTrue(echoes("zai", "zai"))
+        self.assertTrue(echoes("henry是傻逼。", "我说\nhenry是傻逼"))  # 搬回对方其中一句
+        self.assertFalse(echoes("好好学", "自习"))
+        self.assertFalse(echoes("好", "好好学习"))  # 太短的不算复述
+        self.assertFalse(echoes("别闹", "你说henry是傻逼"))
+
+
 if __name__ == "__main__":
     unittest.main()

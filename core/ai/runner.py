@@ -8,7 +8,7 @@ import threading
 import time
 
 from core.ai.config import AIConfig
-from core.ai.engine import ReplyEngine
+from core.ai.engine import ReplyEngine, echoes
 from core.ai.providers import create_provider
 from core.session_store import SessionStore, capture_state
 from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, JS_COLLECT, norm
@@ -172,6 +172,9 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                     continue
                 # 发送前就去重；回执缺失不重发，防止同一回复发送两次。
                 engine.consume(pending)
+                if echoes(reply, pending.text):
+                    emit("error", f"{name} → {hit['display']}：回复只是复述对方的话，已丢弃")
+                    continue
                 result = im.type_and_send(hit, reply, log_content=False)
                 if result.get("ok"):
                     engine.commit(pending, reply)

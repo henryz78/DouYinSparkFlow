@@ -3,9 +3,16 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+import re
 import time
 
 from core.ai.config import AIConfig
+
+
+def echoes(reply, text):
+    """回复只是把对方的话搬回来：整句相同，或是其中完整的一段（去掉标点空白后比较）。"""
+    r, t = (re.sub(r"[\W_]+", "", x) for x in (reply, text))
+    return bool(r) and (r == t or (len(r) >= 4 and r in t))
 
 
 @dataclass
