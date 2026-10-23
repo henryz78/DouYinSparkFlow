@@ -187,6 +187,7 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                 if echoes(reply, pending.text):
                     emit("error", f"{name} → {hit['display']}：回复只是复述对方的话，已丢弃")
                     continue
+                reply = engine.dedupe_emoji(cid, reply)
                 items = reply_items(reply, config.stickers)
                 if not items:
                     emit("error", f"{name} → {hit['display']}：回复里没有可发送的内容，已丢弃")

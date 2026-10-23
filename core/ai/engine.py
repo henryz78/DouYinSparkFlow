@@ -26,9 +26,13 @@ def reply_items(reply, stickers=(), limit=5):
     return items + [("sticker", names[0])] if names else items
 
 
+EMOJI_RE = re.compile(r"\[[^\[\]\s]{1,6}\]")  # 抖音小表情，如 [笑哭]
+
+
 def split_reply(reply, limit=5):
-    """回复里的空格当作断句，拆成多条消息（像微信里连发几句）；超过 limit 条的并进最后一条。"""
-    parts = reply.split()
+    """回复里的空格当作断句，拆成多条消息（像微信里连发几句）；超过 limit 条的并进最后一条。
+    [笑哭] 这类小表情不管前后有没有空格，都单独成一条。"""
+    parts = EMOJI_RE.sub(r" \g<0> ", reply).split()
     if len(parts) > limit:
         parts[limit - 1:] = [" ".join(parts[limit - 1:])]
     return parts or [reply]
@@ -101,6 +105,12 @@ class ReplyEngine:
         return PendingReply(conv_id, tuple(str(r["id"]) for r in incoming),
                             "\n".join(texts)[-8000:],
                             incoming[-1]["created_at"], is_group)
+
+    def dedupe_emoji(self, conv_id, reply):
+        """最近几轮里我们自己（assistant）已经带过小表情，这次就去掉；对方发的不算。"""
+        if any(EMOJI_RE.search(m["content"]) for m in self.history.get(conv_id, []) if m["role"] == "assistant"):
+            return EMOJI_RE.sub("", reply)
+        return reply
 
     def blocked_until(self, conv_id):
         """冷却或失败退避的结束时间（墙钟）；没有被挡住返回 0。"""

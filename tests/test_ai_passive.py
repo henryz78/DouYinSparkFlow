@@ -95,6 +95,16 @@ class BlockedUntilTests(unittest.TestCase):
 class EchoTests(unittest.TestCase):
     def test_echo_detection(self):
         from core.ai.engine import echoes, split_reply, reply_items
+        self.assertEqual(split_reply("笑死我了[笑哭]"), ["笑死我了", "[笑哭]"])
+        self.assertEqual(split_reply("[捂脸]好惨 哎"), ["[捂脸]", "好惨", "哎"])
+        from core.ai.config import AIConfig
+        from core.ai.engine import ReplyEngine
+        eng = ReplyEngine(AIConfig())
+        eng.history["c"] = [{"role": "user", "content": "哭了[流泪]"}, {"role": "assistant", "content": "抱抱"}]
+        self.assertEqual(eng.dedupe_emoji("c", "笑死 [笑哭]"), "笑死 [笑哭]")  # 只有对方发过，不影响
+        eng.history["c"].append({"role": "assistant", "content": "哈哈 [捂脸]"})
+        self.assertEqual(eng.dedupe_emoji("c", "笑死 [笑哭]"), "笑死 ")  # 我们发过，就去掉
+        self.assertEqual(eng.dedupe_emoji("other", "笑死 [笑哭]"), "笑死 [笑哭]")
         names = ("笑死", "麻了")
         self.assertEqual(reply_items("哈哈 [表情:笑死]", names), [("text", "哈哈"), ("sticker", "笑死")])
         self.assertEqual(reply_items("[表情: 麻了] 好惨 哈", names), [("text", "好惨"), ("text", "哈"), ("sticker", "麻了")])
