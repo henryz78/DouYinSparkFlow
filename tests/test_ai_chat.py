@@ -294,6 +294,26 @@ class TargetAndLifecycleTests(unittest.TestCase):
         self.assertEqual(sent,['这有点坑啊','连电池健康都不给看','厂商在想啥'])
         self.assertEqual([e[0] for e in events].count('sent'),1)
 
+    def test_listed_sticker_is_sent_as_native_sticker_after_the_text(self):
+        stop = threading.Event()
+        config = Config(ai_chat=ai_config())
+        config.ai_chat.stickers = ['笑死']
+        account = Account(username='test',cookies='[]',ai_targets=['好友'])
+        im = MagicMock(ready=True,last_scan={'scanned_all':True})
+        im.wait_ready.return_value={'status':'READY'}
+        hit={'conv_id':'a','display':'好友','title':'好友','is_group':False}
+        im.iter_conversations.return_value=[hit]
+        im.read_chat_messages.side_effect=[[], [row('1',at=time.time()+1)], [row('1',at=time.time()+1)]]
+        provider = MagicMock();provider.reply.return_value='太惨了 [表情:笑死] [表情:乱写的]'
+        im.type_and_send.return_value={'ok':True}
+        def sticker(h, name):stop.set();return {'ok':True}
+        im.send_native_sticker.side_effect=sticker
+        with patch('cloakbrowser.launch'), patch('core.ai.runner.DouyinIM',return_value=im),patch('core.ai.runner.create_provider',return_value=provider):
+            run_account(account,config.ai_chat,config,stop,lambda *e:None)
+        im.type_and_send.assert_called_once_with(hit,'太惨了',log_content=False)
+        im.send_native_sticker.assert_called_once_with(hit,'笑死')
+        self.assertIn('笑死',provider.reply.call_args.args[0][0]['content'])
+
     def test_runner_generates_and_sends_to_selected_group(self):
         stop = threading.Event()
         config = Config(ai_chat=ai_config())

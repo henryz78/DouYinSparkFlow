@@ -37,6 +37,7 @@ class AIConfig:
     max_tokens: int = 512
     max_reply_chars: int = 500
     request_timeout: int = 30
+    stickers: list[str] = field(default_factory=list)  # 允许 AI 发送的抖音原生表情包名称，空表示不发
 
     def to_dict(self):
         return asdict(self)
@@ -59,6 +60,11 @@ class AIConfig:
         for key in ("active_provider", "system_prompt"):
             if key in value:
                 setattr(default, key, str(value[key] or ""))
+        if "stickers" in value:
+            names = value["stickers"]
+            if not isinstance(names, list):
+                raise ValueError("stickers 必须是表情包名称列表")
+            default.stickers = [n for n in dict.fromkeys(str(n).strip() for n in names) if n][:30]
         limits = {
             "poll_interval": (2, 120), "cooldown": (0, 3600),
             "context_turns": (1, 30), "max_tokens": (32, 4096),

@@ -15,6 +15,17 @@ def echoes(reply, text):
     return bool(r) and (r == t or (len(r) >= 4 and r in t))
 
 
+STICKER_RE = re.compile(r"\[表情[:：]\s*([^\]\s]+)\s*\]")
+
+
+def reply_items(reply, stickers=(), limit=5):
+    """把回复拆成要依次发出的内容：("text", 文字) 或 ("sticker", 名称)。
+    文字按空格分条；[表情:名称] 只认名单里的第一个，发在最后，其余丢掉。"""
+    names = [n for n in STICKER_RE.findall(reply) if n in stickers]
+    items = [("text", p) for p in split_reply(STICKER_RE.sub(" ", reply), limit) if p.strip()]
+    return items + [("sticker", names[0])] if names else items
+
+
 def split_reply(reply, limit=5):
     """回复里的空格当作断句，拆成多条消息（像微信里连发几句）；超过 limit 条的并进最后一条。"""
     parts = reply.split()
@@ -101,6 +112,9 @@ class ReplyEngine:
         prompt += ("\n带有‘未观看视频内容’或‘未识别图像内容’的消息是媒体摘要，"
                    "仅依据可读标题、标签和上下文自然回应；不要声称看过视频或识别了图像，"
                    "信息不足时可以询问对方，不要输出内部摘要标记。")
+        if self.config.stickers:
+            prompt += ("\n你可以偶尔发一个表情包：在回复里单独写一段 [表情:名称]，放在最后，名称只能从这些里选："
+                       + "、".join(self.config.stickers) + "。只在情绪到位时才发，大多数回复不发，不要连着几次都发。")
         if pending.is_group:
             prompt += ("\n当前是多人群聊，[成员N] 是同一成员的固定标签，"
                        "[未识别成员] 的消息可能来自不同人。根据发言顺序和成员标签理解对话，"
