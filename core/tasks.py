@@ -15,6 +15,18 @@ userData = get_userData()
 logger = setup_logger(level=config.get("logLevel", "Info"))
 
 
+def find_and_select(im, page, targets, attempts=6, wait_ms=15000):
+    """iter_find_and_select 的重扫版：会话列表加载慢时第一遍可能只渲染出一两个就当成到底了，
+    没找到的目标等一会儿再扫；已经找到并发过的不会重复。"""
+    for attempt in range(attempts):
+        yield from im.iter_find_and_select(targets)
+        targets = (im.last_scan or {}).get("missing") or []
+        if not targets or attempt == attempts - 1:
+            return
+        logger.warning(f"还有 {len(targets)} 个目标没找到，{wait_ms // 1000} 秒后重扫（{attempt + 1}/{attempts - 1}）")
+        page.wait_for_timeout(wait_ms)
+
+
 def method_label():
     """运行记录里显示的发送方式。"""
     if config["deliveryMode"] == "native_sticker":
@@ -99,7 +111,7 @@ def do_user_task(browser, username, cookies, targets, unique_id='', fingerprint=
         results = {}  # 好友 → ok / failed / uncertain / missing / select_failed，给控制台逐人显示
 
         # 生成器：yield 出来的那一刻，对应好友的会话已经被选中
-        for friend in im.iter_find_and_select(targets):
+        for friend in find_and_select(im, page, targets):
             logger.debug(f"账号 {username} 已选中好友 {friend['display']}，准备发送")
             message = None if sticker_mode else build_message()
             r = send(friend, message)

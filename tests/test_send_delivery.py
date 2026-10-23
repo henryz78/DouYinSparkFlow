@@ -7,6 +7,35 @@ from core.douyin_im import DouyinIM, STATUS_READY
 from core import tasks
 
 
+class FindAndSelectTests(unittest.TestCase):
+    def test_missing_targets_are_rescanned_until_found(self):
+        im, page = Mock(), Mock()
+        calls = []
+        def scan(targets):
+            calls.append(list(targets))
+            if len(calls) == 1:
+                im.last_scan = {"missing": ["b"]}
+                yield {"display": "a"}
+            else:
+                im.last_scan = {"missing": []}
+                yield {"display": "b"}
+        im.iter_find_and_select.side_effect = scan
+        found = [f["display"] for f in tasks.find_and_select(im, page, ["a", "b"])]
+        self.assertEqual(found, ["a", "b"])
+        self.assertEqual(calls, [["a", "b"], ["b"]])
+        page.wait_for_timeout.assert_called_once()
+
+    def test_gives_up_after_the_last_attempt_and_keeps_missing(self):
+        im, page = Mock(), Mock()
+        def scan(targets):
+            im.last_scan = {"missing": ["x"]}
+            return iter(())
+        im.iter_find_and_select.side_effect = scan
+        self.assertEqual(list(tasks.find_and_select(im, page, ["x"], attempts=3)), [])
+        self.assertEqual(im.iter_find_and_select.call_count, 3)
+        self.assertEqual(im.last_scan["missing"], ["x"])
+
+
 class DeliveryTests(unittest.TestCase):
     def setUp(self):
         self.im = object.__new__(DouyinIM)
