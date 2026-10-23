@@ -15,7 +15,7 @@ userData = get_userData()
 logger = setup_logger(level=config.get("logLevel", "Info"))
 
 
-def find_and_select(im, page, targets, attempts=6, wait_ms=15000):
+def find_and_select(im, page, targets, attempts=10, wait_ms=15000):
     """iter_find_and_select 的重扫版：会话列表加载慢时第一遍可能只渲染出一两个就当成到底了，
     没找到的目标等一会儿再扫；已经找到并发过的不会重复。"""
     for attempt in range(attempts):
