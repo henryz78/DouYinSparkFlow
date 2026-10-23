@@ -15,6 +15,14 @@ def echoes(reply, text):
     return bool(r) and (r == t or (len(r) >= 4 and r in t))
 
 
+def split_reply(reply, limit=5):
+    """回复里的空格当作断句，拆成多条消息（像微信里连发几句）；超过 limit 条的并进最后一条。"""
+    parts = reply.split()
+    if len(parts) > limit:
+        parts[limit - 1:] = [" ".join(parts[limit - 1:])]
+    return parts or [reply]
+
+
 @dataclass
 class PendingReply:
     conv_id: str

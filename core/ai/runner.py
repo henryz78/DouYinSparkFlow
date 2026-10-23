@@ -4,11 +4,12 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 import os
+import random
 import threading
 import time
 
 from core.ai.config import AIConfig
-from core.ai.engine import ReplyEngine, echoes
+from core.ai.engine import ReplyEngine, echoes, split_reply
 from core.ai.providers import create_provider
 from core.session_store import SessionStore, capture_state
 from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, JS_COLLECT, norm
@@ -175,9 +176,19 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                 if echoes(reply, pending.text):
                     emit("error", f"{name} → {hit['display']}：回复只是复述对方的话，已丢弃")
                     continue
-                result = im.type_and_send(hit, reply, log_content=False)
-                if result.get("ok"):
+                parts = split_reply(reply)
+                sent = 0
+                for part in parts:
+                    if sent:
+                        page.wait_for_timeout(random.randint(800, 1600))
+                    if stop.is_set() and sent:
+                        break
+                    if not im.type_and_send(hit, part, log_content=False).get("ok"):
+                        break
+                    sent += 1
+                if sent:
                     engine.commit(pending, reply)
+                if sent == len(parts):
                     emit("sent", f"{name} → {hit['display']}：回复成功")
                 else:
                     emit("error", f"{name} → {hit['display']}：未确认发送成功，未自动重发")

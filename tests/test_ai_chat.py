@@ -251,15 +251,37 @@ class TargetAndLifecycleTests(unittest.TestCase):
         hit={'conv_id':'a','display':'好友','title':'好友','is_group':False}
         im.iter_conversations.return_value=[hit]
         im.read_chat_messages.side_effect=[[], [row('1',at=time.time()+1)], [row('1',at=time.time()+1)]]
-        provider = MagicMock();provider.reply.return_value='你好，我是 AI。'
+        provider = MagicMock();provider.reply.return_value='你好，我是AI。'
         events = []
         def send(*args, **kwargs):stop.set();return {'ok':True}
         im.type_and_send.side_effect=send
         with patch('cloakbrowser.launch'), patch('core.ai.runner.DouyinIM',return_value=im),patch('core.ai.runner.create_provider',return_value=provider):
             run_account(account,config.ai_chat,config,stop,lambda *e:events.append(e))
-        im.type_and_send.assert_called_once_with(hit,'你好，我是 AI。',log_content=False)
+        im.type_and_send.assert_called_once_with(hit,'你好，我是AI。',log_content=False)
         self.assertTrue(any(e[0]=='sent' for e in events))
         self.assertEqual(provider.reply.call_args.args[0][-1],{'role':'user','content':'你好'})
+
+    def test_spaces_in_reply_become_separate_messages(self):
+        stop = threading.Event()
+        config = Config(ai_chat=ai_config())
+        account = Account(username='test',cookies='[]',ai_targets=['好友'])
+        im = MagicMock(ready=True,last_scan={'scanned_all':True})
+        im.wait_ready.return_value={'status':'READY'}
+        hit={'conv_id':'a','display':'好友','title':'好友','is_group':False}
+        im.iter_conversations.return_value=[hit]
+        im.read_chat_messages.side_effect=[[], [row('1',at=time.time()+1)], [row('1',at=time.time()+1)]]
+        provider = MagicMock();provider.reply.return_value='这有点坑啊 连电池健康都不给看 厂商在想啥'
+        events = []
+        sent = []
+        def send(h, text, **kwargs):
+            sent.append(text)
+            if len(sent) == 3:stop.set()
+            return {'ok':True}
+        im.type_and_send.side_effect=send
+        with patch('cloakbrowser.launch'), patch('core.ai.runner.DouyinIM',return_value=im),patch('core.ai.runner.create_provider',return_value=provider):
+            run_account(account,config.ai_chat,config,stop,lambda *e:events.append(e))
+        self.assertEqual(sent,['这有点坑啊','连电池健康都不给看','厂商在想啥'])
+        self.assertEqual([e[0] for e in events].count('sent'),1)
 
     def test_runner_generates_and_sends_to_selected_group(self):
         stop = threading.Event()

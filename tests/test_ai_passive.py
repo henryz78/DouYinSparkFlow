@@ -94,7 +94,10 @@ class BlockedUntilTests(unittest.TestCase):
 
 class EchoTests(unittest.TestCase):
     def test_echo_detection(self):
-        from core.ai.engine import echoes
+        from core.ai.engine import echoes, split_reply
+        self.assertEqual(split_reply("a b  c"), ["a", "b", "c"])
+        self.assertEqual(split_reply("一二三"), ["一二三"])
+        self.assertEqual(split_reply("1 2 3 4 5 6 7", limit=3), ["1", "2", "3 4 5 6 7"])
         self.assertTrue(echoes("这个ai好废物啊", "这个ai好废物啊"))
         self.assertTrue(echoes("zai", "zai"))
         self.assertTrue(echoes("henry是傻逼。", "我说\nhenry是傻逼"))  # 搬回对方其中一句
