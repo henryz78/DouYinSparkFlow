@@ -199,6 +199,17 @@ class TargetAndLifecycleTests(unittest.TestCase):
             im.iter_conversations.return_value=hits
             with self.assertRaises(ValueError):resolve_targets(im,['小明'],threading.Event())
 
+    def test_target_missing_on_a_half_loaded_list_is_found_on_a_later_scan(self):
+        im = MagicMock(last_scan={'scanned_all':True})
+        half = [{'conv_id':'x','title':'别人','is_group':False}]
+        full = half + [{'conv_id':'a','title':'小明','is_group':False}]
+        im.iter_conversations.side_effect = [half, half, full]
+        result = resolve_targets(im,['小明'],threading.Event())
+        self.assertEqual(result[0]['conv_id'],'a')
+        self.assertEqual(im.page.wait_for_timeout.call_count,2)
+        im.iter_conversations.side_effect = lambda: half
+        with self.assertRaises(ValueError):resolve_targets(im,['小明'],threading.Event(),attempts=2)
+
     def test_groups_match_title_or_id_without_matching_member_identity(self):
         im = MagicMock(last_scan={'scanned_all': True})
         group = {'conv_id': 'group-1', 'title': '聊天群', 'nickname': '成员昵称', 'is_group': True}

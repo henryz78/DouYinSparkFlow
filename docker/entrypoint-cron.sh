@@ -30,7 +30,9 @@ if [[ "$(cd /app && python -c "from app.config.env_store import load_config; pri
     cd /app
     source /etc/douyin-spark-flow.env
     while true; do
-      python main.py chat >> /app/logs/ai-chat.log 2>&1 || true
+      code=0
+      python main.py chat >> /app/logs/ai-chat.log 2>&1 || code=$?
+      echo "[docker] chat exited code=$code" >> /app/logs/ai-chat.log
       sleep 60
     done
   ) &

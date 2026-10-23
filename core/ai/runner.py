@@ -31,7 +31,18 @@ def passive_rows(page):
     return {str(r["convId"]): r for r in rows if isinstance(r, dict) and r.get("convId")}
 
 
-def resolve_targets(im, targets, stop):
+def resolve_targets(im, targets, stop, attempts=4, wait_ms=15000):
+    """重新登录后会话列表有时只渲染出一两个就被当成到底；找不到目标先多等几轮再重扫，不要整个重启。"""
+    for attempt in range(attempts):
+        try:
+            return _resolve_targets(im, targets, stop)
+        except ValueError as exc:
+            if not str(exc).startswith("未找到陪聊会话") or attempt == attempts - 1 or stop.is_set():
+                raise
+            im.page.wait_for_timeout(wait_ms)
+
+
+def _resolve_targets(im, targets, stop):
     wanted = {norm(t) for t in targets if norm(t)}
     matches = {t: {} for t in wanted}
     for hit in im.iter_conversations():
