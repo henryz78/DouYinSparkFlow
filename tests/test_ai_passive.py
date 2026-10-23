@@ -1,5 +1,6 @@
 """陪聊平时只读列表、有动静才切会话。不联系真实好友。"""
 import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -105,6 +106,18 @@ class EchoTests(unittest.TestCase):
         eng.history["c"].append({"role": "assistant", "content": "哈哈 [捂脸]"})
         self.assertEqual(eng.dedupe_emoji("c", "笑死 [笑哭]"), "笑死 ")  # 我们发过，就去掉
         self.assertEqual(eng.dedupe_emoji("other", "笑死 [笑哭]"), "笑死 [笑哭]")
+        from core.ai import runner
+        codes = []
+        def fake_exit(code):
+            codes.append(code)
+            raise SystemExit
+        runner.HEARTBEAT.clear()
+        runner.HEARTBEAT["ok"] = time.monotonic()
+        runner.HEARTBEAT["stuck"] = time.monotonic() - runner.HANG_SECONDS - 1
+        with self.assertRaises(SystemExit):
+            runner.watch_heartbeat(interval=0, exit=fake_exit)
+        runner.HEARTBEAT.clear()
+        self.assertEqual(codes, [3])
         names = ("笑死", "麻了")
         self.assertEqual(reply_items("哈哈 [表情:笑死]", names), [("text", "哈哈"), ("sticker", "笑死")])
         self.assertEqual(reply_items("[表情: 麻了] 好惨 哈", names), [("text", "好惨"), ("text", "哈"), ("sticker", "麻了")])

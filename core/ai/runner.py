@@ -18,6 +18,19 @@ from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, JS_COLLECT, nor
 # “变了”优先看消息 id（lastKey），文字相同的重复消息也分得出来。
 # 只有读不到消息 id 的会话才退回按文字判断，并每隔这么久巡检一次。
 SWEEP_SECONDS = 90
+# 监听就绪后主循环每圈都会打卡；浏览器页面卡死时 Playwright 调用没有超时，会一直挂着不回复。
+# 超过这么久没打卡就让进程退出，由 entrypoint 的重启循环拉起。
+HANG_SECONDS = 300
+HEARTBEAT = {}
+
+
+def watch_heartbeat(interval=30, exit=os._exit):
+    while True:
+        time.sleep(interval)
+        for name, beat in list(HEARTBEAT.items()):
+            if time.monotonic() - beat > HANG_SECONDS:
+                print(f"{name}：陪聊超过 {HANG_SECONDS} 秒没有进展，进程退出等待自动重启", flush=True)
+                exit(3)
 
 
 def passive_rows(page):
@@ -123,6 +136,7 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
         last_key = {}     # 会话 → 上次处理时列表里的"最后一条消息"（id，没有就用文字）
         next_check = {}   # 会话 → 到点必须再读一次（monotonic）；0 表示马上读，inf 表示只在有变化时读
         while not stop.is_set():
+            HEARTBEAT[name] = time.monotonic()
             # READY is cached by the IM client. A later page navigation or
             # disappearing chat root must not leave the worker alive forever.
             dom = page.evaluate(JS_LOGIN_DOM)
@@ -135,6 +149,7 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                 if page_missing:
                     break
                 cid = str(hit["conv_id"])
+                HEARTBEAT[name] = time.monotonic()
                 if not im.ready:
                     raise ValueError(f"{name} 登录已失效，请刷新登录信息")
                 row = rows.get(cid) if rows is not None else None
@@ -228,6 +243,7 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                 page.wait_for_timeout(min(remaining, 150))
                 remaining -= 150
     finally:
+        HEARTBEAT.pop(name, None)
         if context is not None and im is not None and im.ready:
             with suppress(Exception):
                 dom = context.pages[-1].evaluate(JS_LOGIN_DOM)
@@ -250,6 +266,7 @@ def cli():
         os.environ.setdefault("CLOAKBROWSER_BINARY_PATH", str(binary))
     os.environ.setdefault("CLOAKBROWSER_AUTO_UPDATE", "false")
     config, _ = load_config()
+    threading.Thread(target=watch_heartbeat, daemon=True, name="ai-watchdog").start()
     controller = ChatController(lambda kind, message: print(message, flush=True))
     try:
         controller.start(config)
