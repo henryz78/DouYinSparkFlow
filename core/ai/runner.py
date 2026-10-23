@@ -31,7 +31,7 @@ def passive_rows(page):
     return {str(r["convId"]): r for r in rows if isinstance(r, dict) and r.get("convId")}
 
 
-def resolve_targets(im, targets, stop, attempts=4, wait_ms=15000):
+def resolve_targets(im, targets, stop, attempts=10, wait_ms=15000):
     """重新登录后会话列表有时只渲染出一两个就被当成到底；找不到目标先多等几轮再重扫，不要整个重启。"""
     for attempt in range(attempts):
         try:
