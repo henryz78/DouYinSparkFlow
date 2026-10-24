@@ -139,6 +139,7 @@ class ConfigService:
                     "cookies": account.cookies,
                     "targets": list(account.targets),
                     "ai_targets": list(account.ai_targets),
+                    "ai_personas": dict(account.ai_personas),
                     "profile_folder": account.profile_folder,
                     "fingerprint": account.fingerprint,
                     # 会话名单在 profiles.json（拉取会话列表的结果），
@@ -201,6 +202,8 @@ class ConfigService:
                     cookies=str(raw.get("cookies") or ""),
                     targets=[str(t) for t in targets if str(t).strip()],
                     ai_targets=[str(t) for t in (raw.get("ai_targets") if isinstance(raw.get("ai_targets"), list) else []) if str(t).strip()],
+                    ai_personas={str(k): str(v) for k, v in (raw.get("ai_personas") or {}).items()}
+                    if isinstance(raw.get("ai_personas"), dict) else {},
                     fingerprint=str(raw.get("fingerprint") or "").strip(),
                 )
             )

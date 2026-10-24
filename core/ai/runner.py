@@ -55,26 +55,30 @@ def resolve_targets(im, targets, stop, attempts=10, wait_ms=15000):
             im.page.wait_for_timeout(wait_ms)
 
 
+def matches(hit, key):
+    fields = ("title", "conv_id") if hit.get("is_group") else (
+        "remark", "nickname", "douyin_id", "uid", "sec_uid", "title", "conv_id")
+    return any(norm(hit.get(field) or "") == key for field in fields)
+
+
 def _resolve_targets(im, targets, stop):
     wanted = {norm(t) for t in targets if norm(t)}
-    matches = {t: {} for t in wanted}
+    found = {t: {} for t in wanted}
     for hit in im.iter_conversations():
         if stop.is_set():
             return []
         for key in wanted:
-            fields = ("title", "conv_id") if hit.get("is_group") else (
-                "remark", "nickname", "douyin_id", "uid", "sec_uid", "title", "conv_id")
-            if any(norm(hit.get(field) or "") == key for field in fields):
-                matches[key][str(hit["conv_id"])] = dict(hit)
+            if matches(hit, key):
+                found[key][str(hit["conv_id"])] = dict(hit)
     if not (im.last_scan or {}).get("scanned_all"):
         raise ValueError("会话列表未扫描完整，暂不启动陪聊，请增加扫描预算后重试")
     result = {}
-    for key, found in matches.items():
-        if not found:
+    for key, hits in found.items():
+        if not hits:
             raise ValueError(f"未找到陪聊会话：{key}")
-        if len(found) != 1:
+        if len(hits) != 1:
             raise ValueError(f"陪聊会话存在重名：{key}，请改用会话 ID；好友也可用抖音号或 UID")
-        hit = next(iter(found.values()))
+        hit = next(iter(hits.values()))
         result[str(hit["conv_id"])] = hit
     return list(result.values())
 
@@ -123,6 +127,10 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
         emit("status", f"{name}：已连接，正在扫描好友和群聊会话")
         hits = resolve_targets(im, account.ai_targets, stop)
         engine = ReplyEngine(config, started_at=started_at)
+        chosen = {norm(k): v for k, v in account.ai_personas.items()}
+        for hit in hits:
+            key = next((k for k in chosen if matches(hit, k)), None)
+            engine.personas[str(hit["conv_id"])] = config.persona_prompt(chosen.get(key))
         emit("status", f"{name}：正在初始化会话，跳过现有消息")
         for hit in hits:
             if stop.is_set():

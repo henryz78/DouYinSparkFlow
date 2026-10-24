@@ -153,7 +153,16 @@ h1, h2, p, ul { margin: 0; padding: 0; }
 .switch input { width: 18px; height: 18px; accent-color: var(--ink); }
 .savebar { display: flex; align-items: center; gap: 16px; position: sticky; bottom: 0; padding: 16px 0; background: linear-gradient(to top, var(--paper) 70%, transparent); }
 .savebar .ok { color: var(--success); } .savebar .bad { color: var(--danger); }
-.acct { margin-bottom: 24px; }
+.acct { margin-top: 16px; margin-bottom: 24px; }
+.frow { display: flex; gap: 8px; max-width: 520px; margin-bottom: 8px; }
+.frow .input { margin: 0; }
+.frow .fname { flex: 1; min-width: 0; }
+.frow .fpersona { width: 130px; }
+.pcard { max-width: 520px; margin-bottom: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 4px; }
+.pcard .pprompt { margin-top: 8px; }
+.pcard .pdel { margin-top: 12px; height: 36px; }
+.fadd { margin-top: 4px; height: 36px; }
+#padd { height: 36px; }
 
 /* footer */
 .foot { background: var(--ink); color: var(--paper); padding: 28px 0; }

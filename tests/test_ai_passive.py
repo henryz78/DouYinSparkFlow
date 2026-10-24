@@ -97,7 +97,7 @@ class EchoTests(unittest.TestCase):
     def test_echo_detection(self):
         from core.ai.engine import echoes, split_reply, reply_items
         self.assertEqual(split_reply("笑死我了[笑哭]"), ["笑死我了", "[笑哭]"])
-        self.assertEqual(split_reply("[捂脸]好惨 哎"), ["[捂脸]", "好惨", "哎"])
+        self.assertEqual(split_reply("[捂脸]好惨 哎"), ["好惨", "哎", "[捂脸]"])
         from core.ai.config import AIConfig
         from core.ai.engine import ReplyEngine
         eng = ReplyEngine(AIConfig())
@@ -125,6 +125,13 @@ class EchoTests(unittest.TestCase):
         self.assertEqual(reply_items("[表情:笑死][表情:麻了]", names), [("sticker", "笑死")])
         self.assertEqual(reply_items("[表情:笑死]", ()), [])
         self.assertEqual(split_reply("a b  c"), ["a", "b", "c"])
+        # 夹在中文里的英文词并进后面那句，不单独成条
+        self.assertEqual(split_reply("拿我测试这 Henry 挺会安排人呢"), ["拿我测试这", "Henry 挺会安排人呢"])
+        self.assertEqual(split_reply("你好 ok"), ["你好 ok"])
+        self.assertEqual(split_reply("行 iPhone 15 太贵了 哎"), ["行", "iPhone 15 太贵了", "哎"])
+        # 文字超过条数上限时，小表情仍然单独排在最后
+        self.assertEqual(split_reply("一 二 三 四 五 六 七 [笑哭]"), ["一", "二", "三", "四", "五 六 七", "[笑哭]"])
+        self.assertEqual(split_reply("哈哈 [笑哭] 真的 [捂脸]"), ["哈哈", "真的", "[笑哭]"])
         self.assertEqual(split_reply("一二三"), ["一二三"])
         self.assertEqual(split_reply("1 2 3 4 5 6 7", limit=3), ["1", "2", "3 4 5 6 7"])
         self.assertTrue(echoes("这个ai好废物啊", "这个ai好废物啊"))
@@ -133,6 +140,49 @@ class EchoTests(unittest.TestCase):
         self.assertFalse(echoes("好好学", "自习"))
         self.assertFalse(echoes("好", "好好学习"))  # 太短的不算复述
         self.assertFalse(echoes("别闹", "你说henry是傻逼"))
+
+
+class PersonaTests(unittest.TestCase):
+    def config(self):
+        return AIConfig.from_value({
+            "providers": [{"id": "p", "name": "P", "kind": "deepseek", "base_url": "https://x.test", "model": "m", "api_key": "k"}],
+            "active_provider": "p", "system_prompt": "规则",
+            "personas": [{"name": "损友", "prompt": "爱吐槽"}, {"name": "温柔", "prompt": "说话软"}],
+            "default_persona": "损友"})
+
+    def test_friend_persona_falls_back_to_default_then_nothing(self):
+        c = self.config()
+        self.assertEqual(c.persona_prompt("温柔"), "说话软")
+        self.assertEqual(c.persona_prompt(None), "爱吐槽")
+        self.assertEqual(c.persona_prompt("已删除的"), "爱吐槽")
+        c.default_persona = ""
+        self.assertEqual(c.persona_prompt("已删除的"), "")
+
+    def test_persona_goes_into_that_conversations_prompt_only(self):
+        from core.ai.engine import PendingReply, ReplyEngine
+        engine = ReplyEngine(self.config())
+        engine.personas["a"] = "说话软"
+        mine = engine.messages(PendingReply("a", ("1",), "在吗", 0))[0]["content"]
+        other = engine.messages(PendingReply("b", ("2",), "在吗", 0))[0]["content"]
+        self.assertTrue(mine.startswith("规则") and "说话软" in mine)
+        self.assertNotIn("说话软", other)
+
+    def test_runner_gives_each_friend_the_chosen_persona(self):
+        from core.ai.runner import matches
+        from core.douyin_im import norm
+        account = Account(unique_id="u", ai_targets=["Ken", "Amy"], ai_personas={"Ken": "温柔"})
+        c = self.config()
+        hit = {"conv_id": "1", "remark": "Ken", "title": "Ken"}
+        self.assertTrue(matches(hit, norm("Ken")))
+        chosen = {norm(k): v for k, v in account.ai_personas.items()}
+        self.assertEqual(c.persona_prompt(chosen.get(norm("Ken"))), "说话软")
+        self.assertEqual(c.persona_prompt(chosen.get(norm("Amy"))), "爱吐槽")
+        self.assertEqual(account.to_task()["ai_personas"], {"Ken": "温柔"})
+
+    def test_bad_personas_are_rejected(self):
+        for bad in ([{"name": "", "prompt": "x"}], [{"name": "a", "prompt": "x"}] * 2, "no"):
+            with self.assertRaises(ValueError):
+                AIConfig.from_value({"personas": bad})
 
 
 if __name__ == "__main__":

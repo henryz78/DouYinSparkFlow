@@ -23,21 +23,24 @@ if [[ -n "$(python -c "from dotenv import dotenv_values; print(dotenv_values('/a
   echo "[docker] dashboard enabled on :${DASH_PORT:-8443}"
 fi
 
-# AI 陪聊（可选）：只有某个账号配了 ai_targets 才启动；退出或崩溃后 60 秒自动重启，容器重启也会跟着起来。
+# AI 陪聊：一直有个守护循环在看配置。总开关打开、且某个账号配了 ai_targets 时才启动 main.py chat；
+# 退出或崩溃后 60 秒自动重启。控制台改了陪聊设置会杀掉它，让它按新配置重新起来，无需重启容器。
 # 和 cron、控制台互相独立，不影响定时任务。
-if [[ "$(cd /app && python -c "from app.config.env_store import load_config; print(int(any(a.ai_targets for a in load_config()[0].accounts)))" 2>/dev/null || echo 0)" == "1" ]]; then
-  (
-    cd /app
-    source /etc/douyin-spark-flow.env
-    while true; do
+(
+  cd /app
+  source /etc/douyin-spark-flow.env
+  while true; do
+    if [[ "$(python -c "from app.config.env_store import load_config; c = load_config()[0]; print(int(c.ai_chat.enabled and any(a.ai_targets for a in c.accounts)))" 2>/dev/null || echo 0)" == "1" ]]; then
       code=0
       python main.py chat >> /app/logs/ai-chat.log 2>&1 || code=$?
       echo "[docker] chat exited code=$code" >> /app/logs/ai-chat.log
       sleep 60
-    done
-  ) &
-  echo "[docker] AI chat enabled (logs/ai-chat.log)"
-fi
+    else
+      sleep 20
+    fi
+  done
+) &
+echo "[docker] AI chat watcher started (logs/ai-chat.log)"
 
 echo "[docker] container started, waiting for scheduled runs"
 

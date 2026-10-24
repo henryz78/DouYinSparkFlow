@@ -27,15 +27,30 @@ def reply_items(reply, stickers=(), limit=5):
 
 
 EMOJI_RE = re.compile(r"\[[^\[\]\s]{1,6}\]")  # 抖音小表情，如 [笑哭]
+LATIN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._'’-]*")  # 夹在中文里的英文名、数字
 
 
 def split_reply(reply, limit=5):
-    """回复里的空格当作断句，拆成多条消息（像微信里连发几句）；超过 limit 条的并进最后一条。
-    [笑哭] 这类小表情不管前后有没有空格，都单独成一条。"""
-    parts = EMOJI_RE.sub(r" \g<0> ", reply).split()
-    if len(parts) > limit:
-        parts[limit - 1:] = [" ".join(parts[limit - 1:])]
-    return parts or [reply]
+    """回复里的空格当作断句，拆成多条消息（像微信里连发几句）。
+    夹在中文里的英文词（如 Henry）并进后面那句，不单独成条；超过 limit 条的文字并进最后一条。
+    [笑哭] 这类小表情不管前后有没有空格，都单独成一条，且只发第一个，排在最后。"""
+    tokens = EMOJI_RE.sub(r" \g<0> ", reply).split()
+    emoji = [t for t in tokens if EMOJI_RE.fullmatch(t)]
+    words = [t for t in tokens if not EMOJI_RE.fullmatch(t)]
+    if not all(LATIN_RE.fullmatch(w) for w in words):
+        texts, carry = [], []
+        for w in words:
+            if LATIN_RE.fullmatch(w):
+                carry.append(w)
+            else:
+                texts.append(" ".join(carry + [w]))
+                carry = []
+        if carry:
+            texts[-1] += " " + " ".join(carry)
+        words = texts
+    if len(words) > limit:
+        words[limit - 1:] = [" ".join(words[limit - 1:])]
+    return words + emoji[:1] or [reply]
 
 
 @dataclass
@@ -57,6 +72,7 @@ class ReplyEngine:
         self.retry_after = {}
         self.sender_labels = {}
         self.baselines = {}
+        self.personas = {}  # 会话 → 这个好友用的性格描述
 
     def seed(self, conv_id, rows):
         """Ignore the initial screen; SDK message order avoids unreliable wall clocks."""
@@ -125,6 +141,9 @@ class ReplyEngine:
         if self.config.stickers:
             prompt += ("\n你可以偶尔发一个表情包：在回复里单独写一段 [表情:名称]，放在最后，名称只能从这些里选："
                        + "、".join(self.config.stickers) + "。只在情绪到位时才发，大多数回复不发，不要连着几次都发。")
+        persona = self.personas.get(pending.conv_id)
+        if persona:
+            prompt += "\n你的性格（说话的语气以这里为准，上面的例子只用来学长度和格式）：" + persona
         if pending.is_group:
             prompt += ("\n当前是多人群聊，[成员N] 是同一成员的固定标签，"
                        "[未识别成员] 的消息可能来自不同人。根据发言顺序和成员标签理解对话，"

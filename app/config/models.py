@@ -185,6 +185,7 @@ class Account:
     cookies: str = ""
     targets: list = field(default_factory=list)
     ai_targets: list = field(default_factory=list)
+    ai_personas: dict = field(default_factory=dict)  # 好友名 → 性格名；没写的用默认性格
     profile_folder: str = ""
     fingerprint: str = ""
 
@@ -206,6 +207,7 @@ class Account:
             "fingerprint": self.fingerprint.strip(),
             "targets": list(self.targets),
             "ai_targets": list(self.ai_targets),
+            "ai_personas": dict(self.ai_personas),
         }
 
 
@@ -330,6 +332,8 @@ class Config:
                     targets=[str(t) for t in raw_targets if str(t).strip()],
                     ai_targets=[str(t) for t in (task.get("ai_targets") if isinstance(task.get("ai_targets"), list) else [])
                                 if str(t).strip()],
+                    ai_personas={str(k): str(v) for k, v in (task.get("ai_personas") or {}).items()}
+                    if isinstance(task.get("ai_personas"), dict) else {},
                     # 老版本的 TASKS 里没有这个字段，取不到就留空
                     fingerprint=str(task.get("fingerprint", "") or "").strip(),
                 )

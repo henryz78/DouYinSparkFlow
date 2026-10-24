@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from dotenv import dotenv_values
+
 from web import config_edit
 
 TASKS = [{"username": "海阔山遥", "unique_id": "abc", "targets": ["Rick", "Ken"], "fingerprint": 44671}]
@@ -57,7 +59,38 @@ class ConfigEditTests(unittest.TestCase):
         data = config_edit.read(self.env)
         val = {f["key"]: f["value"] for f in data["fields"]}
         self.assertEqual((val["CRON_HOUR"], val["DELIVERY_MODE"]), ("08", "text"))
-        self.assertEqual(data["accounts"], [{"id": 0, "name": "海阔山遥", "targets": ["Rick", "Ken"]}])
+        self.assertEqual(data["accounts"], [{"id": 0, "name": "海阔山遥", "targets": ["Rick", "Ken"], "chat": []}])
+        self.assertEqual(data["ai"], {"enabled": True, "default_persona": "", "personas": []})
+
+    def test_ai_settings_save_keep_api_key_and_never_leak_it(self):
+        env = self.env.read_text(encoding="utf-8") + 'AI_CHAT={"providers":[{"id":"p","name":"P","kind":"deepseek","base_url":"https://x.test","model":"m","api_key":"APIKEY123"}],"active_provider":"p","system_prompt":"规则","context_turns":4}\n'
+        self.env.write_text(env, encoding="utf-8")
+        self.assertNotIn("APIKEY123", json.dumps(config_edit.read(self.env), ensure_ascii=False))
+        ai = {"enabled": False, "default_persona": "损友",
+              "personas": [{"name": "损友", "prompt": "爱吐槽"}, {"name": "温柔", "prompt": "说话软"}],
+              "friends": {"0": [{"name": " Ken ", "persona": "温柔"}, {"name": "Amy", "persona": ""}]}}
+        self.assertEqual(config_edit.validate({}, {}, ai), {})
+        config_edit.save(self.env, {}, {}, self.dir / "env.bak", ai)
+        saved = dotenv_values(self.env)
+        chat = json.loads(saved["AI_CHAT"])
+        self.assertEqual((chat["enabled"], chat["default_persona"], len(chat["personas"])), (False, "损友", 2))
+        self.assertEqual((chat["providers"][0]["api_key"], chat["context_turns"], chat["system_prompt"]), ("APIKEY123", 4, "规则"))
+        task = json.loads(saved["TASKS"])[0]
+        self.assertEqual((task["ai_targets"], task["ai_personas"], task["targets"]), (["Ken", "Amy"], {"Ken": "温柔"}, ["Rick", "Ken"]))
+        back = config_edit.read(self.env)
+        self.assertEqual(back["accounts"][0]["chat"], [{"name": "Ken", "persona": "温柔"}, {"name": "Amy", "persona": ""}])
+        self.assertFalse(back["ai"]["enabled"])
+
+    def test_ai_settings_are_validated(self):
+        ok = {"enabled": True, "default_persona": "", "personas": [{"name": "甲", "prompt": "x"}], "friends": {"0": []}}
+        v = config_edit.validate
+        self.assertEqual(v({}, {}, ok), {})
+        self.assertIn("ai-enabled", v({}, {}, {**ok, "enabled": "yes"}))
+        self.assertIn("ai-personas", v({}, {}, {**ok, "default_persona": "不存在"}))
+        self.assertIn("ai-personas", v({}, {}, {**ok, "personas": [{"name": "甲", "prompt": "x"}, {"name": "甲", "prompt": "y"}]}))
+        self.assertIn("ai-personas", v({}, {}, {**ok, "personas": [{"name": "", "prompt": "x"}]}))
+        self.assertIn("ai-friends-0", v({}, {}, {**ok, "friends": {"0": [{"name": "", "persona": ""}]}}))
+        self.assertIn("ai-friends-0", v({}, {}, {**ok, "friends": {"0": [{"name": "A", "persona": "没有"}]}}))
 
     def test_save_updates_only_given_keys_and_keeps_the_rest(self):
         config_edit.save(self.env, {"CRON_HOUR": 9, "DELIVERY_MODE": "native_sticker"}, {"0": ["Rick", " Peter "]}, self.dir / "bak" / "env.bak")

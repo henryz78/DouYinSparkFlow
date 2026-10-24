@@ -38,6 +38,14 @@ class AIConfig:
     max_reply_chars: int = 500
     request_timeout: int = 30
     stickers: list[str] = field(default_factory=list)  # 允许 AI 发送的抖音原生表情包名称，空表示不发
+    enabled: bool = True  # 陪聊总开关；关掉后好友名单照样保留
+    personas: list[dict] = field(default_factory=list)  # 性格预设：{"name": 名称, "prompt": 语气描述}
+    default_persona: str = ""  # 没单独指定性格的好友用这个；空表示只用 system_prompt
+
+    def persona_prompt(self, name):
+        """好友指定的性格；没指定或已被删掉就退回默认性格，都没有返回空串。"""
+        found = {p["name"]: p["prompt"] for p in self.personas}
+        return found.get(name) or found.get(self.default_persona, "")
 
     def to_dict(self):
         return asdict(self)
@@ -65,6 +73,12 @@ class AIConfig:
             if not isinstance(names, list):
                 raise ValueError("stickers 必须是表情包名称列表")
             default.stickers = [n for n in dict.fromkeys(str(n).strip() for n in names) if n][:30]
+        if "enabled" in value:
+            default.enabled = bool(value["enabled"])
+        if "personas" in value:
+            default.personas = cls.clean_personas(value["personas"])
+        if "default_persona" in value:
+            default.default_persona = str(value["default_persona"] or "").strip()
         limits = {
             "poll_interval": (2, 120), "cooldown": (0, 3600),
             "context_turns": (1, 30), "max_tokens": (32, 4096),
@@ -77,6 +91,21 @@ class AIConfig:
                     raise ValueError(f"{key} 应在 {lo} 到 {hi} 之间")
                 setattr(default, key, number)
         return default
+
+    @staticmethod
+    def clean_personas(items):
+        if not isinstance(items, list) or len(items) > 12:
+            raise ValueError("性格最多 12 个")
+        out = []
+        for item in items:
+            name = str(item.get("name") or "").strip() if isinstance(item, dict) else ""
+            prompt = str(item.get("prompt") or "").strip() if isinstance(item, dict) else ""
+            if not 1 <= len(name) <= 12 or not 1 <= len(prompt) <= 600:
+                raise ValueError("性格名称 1 到 12 个字，描述 1 到 600 个字")
+            if any(name == o["name"] for o in out):
+                raise ValueError(f"性格名称重复：{name}")
+            out.append({"name": name, "prompt": prompt})
+        return out
 
     def selected(self):
         ids = [p.id for p in self.providers]

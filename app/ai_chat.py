@@ -52,6 +52,8 @@ class ChatController:
             if any(t.is_alive() for t in self._threads):
                 raise ValueError("陪聊已经在运行或正在停止")
             snapshot = copy.deepcopy(config)
+            if not snapshot.ai_chat.enabled:
+                raise ValueError("陪聊总开关是关闭的")
             snapshot.ai_chat.selected()
             # 工厂/协议也预检，API Key 只在后端持有。
             provider = create_provider(snapshot.ai_chat)

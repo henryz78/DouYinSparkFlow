@@ -142,15 +142,18 @@ class Handler(BaseHTTPRequestHandler):
         values = body.get("values") if isinstance(body.get("values"), dict) else {}
         raw = body.get("targets") if isinstance(body.get("targets"), dict) else {}
         targets = dict(raw)
-        errors = config_edit.validate(values, targets)
+        ai = body.get("ai") if isinstance(body.get("ai"), dict) else None
+        errors = config_edit.validate(values, targets, ai)
         known = {str(a["id"]) for a in config_edit.read(ENV_FILE)["accounts"]}
         errors.update({f"account-{k}": "没有这个账号" for k in targets if k not in known})
+        if ai:
+            errors.update({f"ai-friends-{k}": "没有这个账号" for k in ai.get("friends", {}) if k not in known})
         if errors:
             return self._json({"errors": errors}, 400)
         if not ENV_FILE.exists():
             return self._json({"error": "找不到配置文件"}, 500)
-        config_edit.save(ENV_FILE, values, targets, LOGS / "env.bak")
-        ok, message = config_edit.apply()
+        config_edit.save(ENV_FILE, values, targets, LOGS / "env.bak", ai)
+        ok, message = config_edit.apply(chat=ai is not None)
         self._json({"ok": ok, "message": message})
 
     def do_GET(self):

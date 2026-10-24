@@ -167,13 +167,75 @@ function groupHtml(fields) {
   return out.join("");
 }
 
+// ---- AI 陪聊：总开关、每个账号的陪聊好友（自己输入名字，各选一个性格）、性格预设 ----
+const personaOptions = (names, cur) => ['<option value="">默认性格</option>'].concat(names.map((n) => `<option value="${attr(n)}" ${n === cur ? "selected" : ""}>${esc(n)}</option>`)).join("");
+const personaNames = () => [...document.querySelectorAll("#ai-personas .pname")].map((i) => i.value.trim()).filter(Boolean);
+const friendRowHtml = (f, names) => `<div class="frow"><input class="input fname" placeholder="好友名字" value="${attr(f.name)}"><select class="input fpersona">${personaOptions(names, f.persona)}</select><button type="button" class="btn outline fdel">删除</button></div>`;
+const personaCardHtml = (p) => `<div class="pcard" data-orig="${attr(p.name)}"><input class="input pname" placeholder="性格名称" maxlength="12" value="${attr(p.name)}"><textarea class="input pprompt" rows="3" placeholder="用几句话描述这个性格的说话方式">${esc(p.prompt)}</textarea><button type="button" class="btn outline pdel">删除这个性格</button></div>`;
+
+function aiHtml(c) {
+  const names = c.ai.personas.map((p) => p.name);
+  return `<fieldset id="ai-box"><legend>AI 陪聊</legend>
+    <label class="switch"><input type="checkbox" id="ai-enabled" ${c.ai.enabled ? "checked" : ""}>开启 AI 陪聊</label>
+    <p class="small error" data-err="ai-enabled"></p>
+    <p class="small" style="margin:0 0 20px">关掉后好友名单和性格都保留。保存后陪聊约 1 分钟内按新设置重启，之后需要几分钟重新连上抖音。</p>
+    ${c.accounts.map((a) => `<div class="field acct" data-acct="${a.id}"><label>${esc(a.name)} 的陪聊好友</label><div class="frows">${a.chat.map((f) => friendRowHtml(f, names)).join("")}</div><button type="button" class="btn outline fadd">添加好友</button><p class="small error" data-err="ai-friends-${a.id}"></p></div>`).join("")}
+    <div class="field"><label for="ai-default">默认性格（没单独选的好友用这个）</label><select class="input" id="ai-default">${['<option value="">不加性格</option>'].concat(names.map((n) => `<option value="${attr(n)}" ${n === c.ai.default_persona ? "selected" : ""}>${esc(n)}</option>`)).join("")}</select></div>
+    <p class="eyebrow" style="margin:28px 0 12px">性格预设</p>
+    <div id="ai-personas">${c.ai.personas.map(personaCardHtml).join("")}</div>
+    <button type="button" class="btn outline" id="padd">新增性格</button>
+    <p class="small error" data-err="ai-personas"></p>
+  </fieldset>`;
+}
+
+// 性格增删改名后，所有下拉框的选项跟着刷新，已选的性格保持；改名的跟着新名字走
+function refreshPersonaSelects(renamed) {
+  const names = personaNames();
+  const keep = (sel, empty) => {
+    let cur = sel.value;
+    if (renamed && cur === renamed[0]) cur = renamed[1];
+    sel.innerHTML = (empty ? `<option value="">${empty}</option>` : "") + names.map((n) => `<option value="${attr(n)}" ${n === cur ? "selected" : ""}>${esc(n)}</option>`).join("");
+  };
+  document.querySelectorAll("#ai-box .fpersona").forEach((s) => keep(s, "默认性格"));
+  keep($("ai-default"), "不加性格");
+}
+
+function wireAi() {
+  const box = $("ai-box");
+  if (!box) return;
+  box.addEventListener("click", (e) => {
+    const t = e.target;
+    if (t.classList.contains("fdel")) t.closest(".frow").remove();
+    else if (t.classList.contains("fadd")) t.previousElementSibling.insertAdjacentHTML("beforeend", friendRowHtml({ name: "", persona: "" }, personaNames()));
+    else if (t.id === "padd") { $("ai-personas").insertAdjacentHTML("beforeend", personaCardHtml({ name: "", prompt: "" })); }
+    else if (t.classList.contains("pdel")) { t.closest(".pcard").remove(); refreshPersonaSelects(); }
+  });
+  box.addEventListener("change", (e) => {
+    if (!e.target.classList.contains("pname")) return;
+    const card = e.target.closest(".pcard"), now = e.target.value.trim();
+    refreshPersonaSelects([card.dataset.orig, now]);
+    card.dataset.orig = now;
+  });
+}
+
+function collectAi() {
+  const friends = {};
+  document.querySelectorAll("#ai-box .acct").forEach((acct) => {
+    friends[acct.dataset.acct] = [...acct.querySelectorAll(".frow")].map((r) => ({ name: r.querySelector(".fname").value.trim(), persona: r.querySelector(".fpersona").value })).filter((f) => f.name);
+  });
+  const personas = [...document.querySelectorAll("#ai-personas .pcard")].map((c) => ({ name: c.querySelector(".pname").value.trim(), prompt: c.querySelector(".pprompt").value.trim() })).filter((p) => p.name || p.prompt);
+  return { enabled: $("ai-enabled").checked, default_persona: $("ai-default").value, personas, friends };
+}
+const aiSignature = (c) => JSON.stringify({ enabled: c.ai.enabled, default_persona: c.ai.default_persona, personas: c.ai.personas, friends: Object.fromEntries(c.accounts.map((a) => [String(a.id), a.chat.map((f) => ({ name: f.name, persona: f.persona }))])) });
+
 async function loadConfig() {
   const c = await get("/api/config");
   cfgLoaded = c;
   const groups = c.groups.map((g) => `<fieldset><legend>${esc(g.label)}</legend>${g.note ? `<p class="small" style="margin:0 0 20px">${esc(g.note)}</p>` : ""}${groupHtml(c.fields.filter((f) => f.group === g.id))}</fieldset>`).join("");
-  $("cfg-form").innerHTML = groups + `
-    <fieldset><legend>好友名单</legend>${c.accounts.map((a) => `<div class="field acct"><label for="acct-${a.id}">${esc(a.name)}（每行一位好友）</label><textarea class="input" id="acct-${a.id}" rows="${Math.max(3, a.targets.length + 1)}">${esc(a.targets.join("\n"))}</textarea><p class="small error" data-err="account-${a.id}"></p></div>`).join("") || '<p class="small">没有账号。</p>'}</fieldset>
+  $("cfg-form").innerHTML = groups + aiHtml(c) + `
+    <fieldset><legend>续火花好友名单</legend>${c.accounts.map((a) => `<div class="field acct"><label for="acct-${a.id}">${esc(a.name)}（每行一位好友）</label><textarea class="input" id="acct-${a.id}" rows="${Math.max(3, a.targets.length + 1)}">${esc(a.targets.join("\n"))}</textarea><p class="small error" data-err="account-${a.id}"></p></div>`).join("") || '<p class="small">没有账号。</p>'}</fieldset>
     <div class="savebar"><button class="btn primary" type="submit">保存并生效</button><span class="small" id="cfg-msg"></span></div>`;
+  wireAi();
 }
 
 $("cfg-form").addEventListener("submit", async (e) => {
@@ -192,7 +254,10 @@ $("cfg-form").addEventListener("submit", async (e) => {
   }
   document.querySelectorAll("[data-err]").forEach((p) => (p.textContent = ""));
   const msg = $("cfg-msg"); msg.className = "small"; msg.textContent = "保存中…";
-  const r = await post("/api/config", { values, targets });
+  const ai = collectAi();
+  const body = { values, targets };
+  if (JSON.stringify(ai) !== aiSignature(cfgLoaded)) body.ai = ai;  // 陪聊没改就不提交，也就不会重启它
+  const r = await post("/api/config", body);
   if (r.status === 401) return showLogin();
   const out = await r.json();
   if (r.status === 400) {

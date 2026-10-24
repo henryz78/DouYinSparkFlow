@@ -43,6 +43,12 @@ Whenever the user says upstream has released a new version, Claude does the merg
   restart loop when any account has `ai_targets`. `core/ai/runner.py` reads the conversation list passively
   and only opens a chat when it shows unread or a new last-message id (`lastKey`, added to `JS_COLLECT`),
   or when a skipped reply (cooldown, API failure) is due again. Only conversations without an id fall back to text plus a 90 s sweep.
+  Settings live in the web console (AI section): master switch (`AI_CHAT.enabled`), per-account friend list
+  (`ai_targets`, typed in by name) with a persona per friend (`ai_personas`), and persona presets
+  (`AI_CHAT.personas`/`default_persona`). `system_prompt` is the shared rules; the persona text is appended per
+  conversation. The entrypoint runs a watcher loop that starts `main.py chat` only while the switch is on and
+  friends exist; saving AI settings in the console kills the worker so it restarts with the new config.
+  Providers and API keys are never exposed to the web console.
 - **`core/tasks.py`**: merged with upstream's exit code and per-account isolation; we keep
   the run record and per-friend results.
 - **Desktop app** (`app/`): our extra settings live in `app/config/models.py`;
