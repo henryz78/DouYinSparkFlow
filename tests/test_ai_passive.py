@@ -125,10 +125,11 @@ class EchoTests(unittest.TestCase):
         self.assertEqual(reply_items("[表情:笑死][表情:麻了]", names), [("sticker", "笑死")])
         self.assertEqual(reply_items("[表情:笑死]", ()), [])
         self.assertEqual(split_reply("a b  c"), ["a", "b", "c"])
-        # 夹在中文里的英文词并进后面那句，不单独成条
-        self.assertEqual(split_reply("拿我测试这 Henry 挺会安排人呢"), ["拿我测试这", "Henry 挺会安排人呢"])
+        # 英文词前后的空格不算断句，和两边的中文连成一句
+        self.assertEqual(split_reply("拿我测试 这 Henry 挺会安排人呢"), ["拿我测试", "这 Henry 挺会安排人呢"])
+        self.assertEqual(split_reply("拿我测试这 Henry 挺会安排人呢"), ["拿我测试这 Henry 挺会安排人呢"])
         self.assertEqual(split_reply("你好 ok"), ["你好 ok"])
-        self.assertEqual(split_reply("行 iPhone 15 太贵了 哎"), ["行", "iPhone 15 太贵了", "哎"])
+        self.assertEqual(split_reply("行 iPhone 15 太贵了 哎"), ["行 iPhone 15 太贵了", "哎"])
         # 文字超过条数上限时，小表情仍然单独排在最后
         self.assertEqual(split_reply("一 二 三 四 五 六 七 [笑哭]"), ["一", "二", "三", "四", "五 六 七", "[笑哭]"])
         self.assertEqual(split_reply("哈哈 [笑哭] 真的 [捂脸]"), ["哈哈", "真的", "[笑哭]"])

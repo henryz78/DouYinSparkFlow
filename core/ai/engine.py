@@ -32,21 +32,20 @@ LATIN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._'’-]*")  # 夹在中文里的�
 
 def split_reply(reply, limit=5):
     """回复里的空格当作断句，拆成多条消息（像微信里连发几句）。
-    夹在中文里的英文词（如 Henry）并进后面那句，不单独成条；超过 limit 条的文字并进最后一条。
+    英文词（如 Henry）前后的空格不算断句，和两边的中文连成一句；超过 limit 条的文字并进最后一条。
     [笑哭] 这类小表情不管前后有没有空格，都单独成一条，且只发第一个，排在最后。"""
     tokens = EMOJI_RE.sub(r" \g<0> ", reply).split()
     emoji = [t for t in tokens if EMOJI_RE.fullmatch(t)]
     words = [t for t in tokens if not EMOJI_RE.fullmatch(t)]
     if not all(LATIN_RE.fullmatch(w) for w in words):
-        texts, carry = [], []
+        texts, glue = [], False  # glue：上一个词是英文，下一个词接在它后面
         for w in words:
-            if LATIN_RE.fullmatch(w):
-                carry.append(w)
+            latin = LATIN_RE.fullmatch(w) is not None
+            if texts and (latin or glue):
+                texts[-1] += " " + w
             else:
-                texts.append(" ".join(carry + [w]))
-                carry = []
-        if carry:
-            texts[-1] += " " + " ".join(carry)
+                texts.append(w)
+            glue = latin
         words = texts
     if len(words) > limit:
         words[limit - 1:] = [" ".join(words[limit - 1:])]
