@@ -11,6 +11,7 @@ import time
 from core.ai.config import AIConfig
 from core.ai.engine import ReplyEngine, echoes, reply_items
 from core.ai.providers import create_provider
+from core import peer_ids
 from core.session_store import SessionStore, capture_state
 from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, JS_COLLECT, norm
 
@@ -44,31 +45,35 @@ def passive_rows(page):
     return {str(r["convId"]): r for r in rows if isinstance(r, dict) and r.get("convId")}
 
 
-def resolve_targets(im, targets, stop, attempts=10, wait_ms=15000):
+def resolve_targets(im, targets, stop, attempts=10, wait_ms=15000, ids=None):
     """重新登录后会话列表有时只渲染出一两个就被当成到底；找不到目标先多等几轮再重扫，不要整个重启。"""
     for attempt in range(attempts):
         try:
-            return _resolve_targets(im, targets, stop)
+            return _resolve_targets(im, targets, stop, ids)
         except ValueError as exc:
             if not str(exc).startswith("未找到陪聊会话") or attempt == attempts - 1 or stop.is_set():
                 raise
             im.page.wait_for_timeout(wait_ms)
 
 
-def matches(hit, key):
-    fields = ("title", "conv_id") if hit.get("is_group") else (
-        "remark", "nickname", "douyin_id", "uid", "sec_uid", "title", "conv_id")
-    return any(norm(hit.get(field) or "") == key for field in fields)
+def matches(hit, key, ids=None):
+    if hit.get("is_group"):
+        return any(norm(hit.get(field) or "") == key for field in ("title", "conv_id"))
+    fields = ("remark", "nickname", "douyin_id", "uid", "sec_uid", "title", "conv_id")
+    # 标题只显示数字（昵称资料没加载出来）时，按以前记下的 uid 认人
+    return any(norm(hit.get(field) or "") == key for field in fields) or bool(
+        ids and ids.get(key) and ids[key] == str(hit.get("uid")))
 
 
-def _resolve_targets(im, targets, stop):
-    wanted = {norm(t) for t in targets if norm(t)}
+def _resolve_targets(im, targets, stop, ids=None):
+    names = {norm(t): t for t in targets if norm(t)}
+    wanted = set(names)
     found = {t: {} for t in wanted}
     for hit in im.iter_conversations():
         if stop.is_set():
             return []
         for key in wanted:
-            if matches(hit, key):
+            if matches(hit, key, ids):
                 found[key][str(hit["conv_id"])] = dict(hit)
     if not (im.last_scan or {}).get("scanned_all"):
         raise ValueError("会话列表未扫描完整，暂不启动陪聊，请增加扫描预算后重试")
@@ -79,6 +84,11 @@ def _resolve_targets(im, targets, stop):
         if len(hits) != 1:
             raise ValueError(f"陪聊会话存在重名：{key}，请改用会话 ID；好友也可用抖音号或 UID")
         hit = next(iter(hits.values()))
+        uid = hit.get("uid")
+        if ids is not None and uid and not hit.get("is_group") and key != norm(uid):
+            ids[key] = str(uid)
+        if not hit.get("is_group") and not (hit.get("remark") or hit.get("nickname")):
+            hit["display"] = names[key]
         result[str(hit["conv_id"])] = hit
     return list(result.values())
 
@@ -125,11 +135,13 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
         checkpoint()
         last_checkpoint = time.monotonic()
         emit("status", f"{name}：已连接，正在扫描好友和群聊会话")
-        hits = resolve_targets(im, account.ai_targets, stop)
+        ids = peer_ids.load(account.unique_id)
+        hits = resolve_targets(im, account.ai_targets, stop, ids=ids)
+        peer_ids.save(account.unique_id, ids)
         engine = ReplyEngine(config, started_at=started_at)
         chosen = {norm(k): v for k, v in account.ai_personas.items()}
         for hit in hits:
-            key = next((k for k in chosen if matches(hit, k)), None)
+            key = next((k for k in chosen if matches(hit, k, ids)), None)
             engine.personas[str(hit["conv_id"])] = config.persona_prompt(chosen.get(key))
         emit("status", f"{name}：正在初始化会话，跳过现有消息")
         for hit in hits:

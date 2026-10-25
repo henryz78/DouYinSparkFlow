@@ -1130,8 +1130,9 @@ class DouyinIM:
 
     def __init__(self, page, url=CHAT_URL, timeout=90.0, max_steps=200,
                  settle_ms=800, ready_timeout=30.0, wait_until="domcontentloaded",
-                 auto_goto=True):
+                 auto_goto=True, peer_ids=None):
         self.page = page
+        self.peer_ids = {} if peer_ids is None else peer_ids  # 名字 → uid，会话标题只显示数字时靠它认人
         self.url = url
         self.timeout = timeout              # 扫描总预算（秒）
         self.max_steps = max_steps          # 滚动步数硬上限
@@ -1344,6 +1345,9 @@ class DouyinIM:
                 if not key:
                     continue
                 item["matched_by"] = how
+                self._learn_peer(key, item, how)
+                if how == "alias":
+                    item["display"] = pending[key]  # 标题是数字，显示配置里的名字
                 pending.pop(key, None)
                 found[key] = item
                 logger.info(f"[SCAN] ✅ 命中 {item['display']}"
@@ -1611,6 +1615,12 @@ class DouyinIM:
             n = _norm(val)
             if n and n in pending:
                 return n, field
+        # 会话标题只显示数字（昵称资料没加载出来）：按以前记下的 uid 认人
+        uid = item.get("uid")
+        if uid and not item.get("is_group"):
+            for n in pending:
+                if getattr(self, "peer_ids", {}).get(n) == str(uid):
+                    return n, "alias"
         # 子串兜底：目标出现在显示名里
         joined = " ".join(_norm(item.get(f) or "") for f in
                           ("display", "title", "nickname", "remark"))
@@ -1618,6 +1628,12 @@ class DouyinIM:
             if n and n in joined:
                 return n, "fuzzy"
         return None, None
+
+    def _learn_peer(self, key, item, how):
+        """按名字找到好友就记下他的 uid；模糊匹配和直接填 uid 的不记。"""
+        uid = item.get("uid")
+        if uid and not item.get("is_group") and how not in ("alias", "fuzzy") and key != _norm(uid):
+            self.peer_ids[key] = str(uid)
 
     def _snooze(self, ms: int, label: str = "等待") -> None:
         """带计时的等待（异常照常抛出，行为与直接调用一致）。"""

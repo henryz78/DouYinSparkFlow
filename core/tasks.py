@@ -8,6 +8,7 @@ from core.browser import get_browser
 from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, norm
 from core.session_store import SessionStore, capture_state
 from core.run_log import record_run
+from core import peer_ids
 
 
 config = get_config()
@@ -67,6 +68,7 @@ def do_user_task(browser, username, cookies, targets, unique_id='', fingerprint=
         return im.type_and_send(friend, message)
 
     im = None
+    peers = peer_ids.load(unique_id)
     try:
         # 打开抖音网页聊天页面由库内部完成（先挂钩子再导航，顺序不可颠倒）
         # 扫描参数全部来自配置：总预算/门禁等待是秒，静默窗是毫秒（见 utils.config）
@@ -76,6 +78,7 @@ def do_user_task(browser, username, cookies, targets, unique_id='', fingerprint=
             ready_timeout=config["imReadyTimeout"],
             settle_ms=config["friendListSettleMs"],
             max_steps=config["imMaxSteps"],
+            peer_ids=peers,
         )
 
         res = im.wait_ready()
@@ -148,6 +151,7 @@ def do_user_task(browser, username, cookies, targets, unique_id='', fingerprint=
             # 发送完让列表状态落定，再继续滚动（发送会把该会话移到顶部）
             page.wait_for_timeout(800)
 
+        peer_ids.save(unique_id, peers)
         scan = im.last_scan or {}
         logger.info(
             f"账号 {username} 扫描结束：停止原因={scan.get('stopped')} "
