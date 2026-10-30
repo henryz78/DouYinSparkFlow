@@ -52,9 +52,6 @@ Whenever the user says upstream has released a new version, Claude does the merg
 - **Friend id fallback** (`core/peer_ids.py`): the chat list sometimes shows a friend's title as a bare number (profile not loaded).
   Matching by name then fails, so a friend found by name has the uid remembered (`logs/peer_ids.json`, per account) and later
   numeric rows are matched by uid. Used by both the spark task and the AI chat.
-- **Spark task starts without the IndexedDB cache** (`without_cache` in `core/session_store.py`): with the saved cache the chat page
-  rendered only a stale handful of conversations (`has_more=None`) and friends fell out of the list. Cookies and localStorage are kept.
-  Suspected, not proven; check the `[LIST]` line (about 12 rendered, `has_more=False`) after a scheduled run.
 - **`core/tasks.py`**: merged with upstream's exit code and per-account isolation; we keep
   the run record and per-friend results.
 - **Desktop app** (`app/`): our extra settings live in `app/config/models.py`;

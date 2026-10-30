@@ -6,7 +6,7 @@ from utils.config import get_config, get_userData
 from core.msg_builder import build_message
 from core.browser import get_browser
 from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, norm
-from core.session_store import SessionStore, capture_state, without_cache
+from core.session_store import SessionStore, capture_state
 from core.run_log import record_run
 from core import peer_ids
 
@@ -47,7 +47,7 @@ def do_user_task(browser, username, cookies, targets, unique_id='', fingerprint=
     """
     sessions = SessionStore(unique_id, cookies, fingerprint)
     state = sessions.load()
-    context = browser.new_context(**({'storage_state':without_cache(state)} if state else {}))
+    context = browser.new_context(**({'storage_state':state} if state else {}))
     context.set_default_navigation_timeout(
         config["browserActionTimeout"]
     )  # 导航超时（毫秒，config 已换算好）
