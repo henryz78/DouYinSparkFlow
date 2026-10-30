@@ -36,8 +36,8 @@ def record_run(logger, username, targets, sent_ok, problems, started, friends=()
         logger.warning(f"运行记录写入失败：{exc}")
 
 
-def today_done(path=None, now=None):
-    """今天每个账号最后一次运行都成功了吗？定时任务据此跳过，避免手动运行后又重复发一遍。"""
+def _last_today(path=None, now=None):
+    """今天每个账号的最后一条运行记录：{账号: 记录}。"""
     last = {}
     today = (now or datetime.now().astimezone()).date().isoformat()
     try:
@@ -48,10 +48,26 @@ def today_done(path=None, now=None):
                 except ValueError:
                     continue
                 if r["start"][:10] == today:
-                    last[r["account"]] = r["status"]
+                    last[r["account"]] = r
     except FileNotFoundError:
-        return False
-    return bool(last) and all(st == "ok" for st in last.values())
+        pass
+    return last
+
+
+def today_done(path=None, now=None):
+    """今天每个账号最后一次运行都成功了吗？定时任务据此跳过，避免手动运行后又重复发一遍。"""
+    last = _last_today(path, now)
+    return bool(last) and all(r["status"] == "ok" for r in last.values())
+
+
+def retry_plan(account, names, path=None, now=None):
+    """补发：今天最后一次运行里已经发到的好友不再发。
+    返回（还要发的好友, 之前已经算数的逐人记录）；今天还没跑过就是全部要发。
+    「待确认」的人可能已经发出去了，不自动重发，也不算成功。"""
+    friends = (_last_today(path, now).get(account) or {}).get("friends") or []
+    done = [f for f in friends if f.get("status") in ("ok", "uncertain") and f.get("name") in names]
+    skip = {f["name"] for f in done}
+    return [n for n in names if n not in skip], done
 
 
 if __name__ == "__main__":  # run-task.sh 用：退出码 0 = 今天已完成

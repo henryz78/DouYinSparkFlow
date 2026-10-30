@@ -73,5 +73,22 @@ class TodayDoneTests(unittest.TestCase):
         self.assertFalse(run_log.today_done(Path("/nonexistent/runs.jsonl")))
 
 
+class RetryPlanTests(TodayDoneTests):
+    def test_only_friends_not_sent_today_are_retried(self):
+        row = {**self._row("a", "partial"), "friends": [
+            {"name": "x", "status": "ok"}, {"name": "y", "status": "missing"},
+            {"name": "z", "status": "uncertain"}, {"name": "w", "status": "failed"}]}
+        f = self._rows(self._row("a", "failed", "2020-01-01"), row)
+        todo, done = run_log.retry_plan("a", ["x", "y", "z", "w", "v"], f)
+        self.assertEqual(todo, ["y", "w", "v"])
+        self.assertEqual([d["name"] for d in done], ["x", "z"])
+
+    def test_nothing_sent_yet_means_everyone(self):
+        f = self._rows(self._row("a", "failed"))
+        self.assertEqual(run_log.retry_plan("a", ["x", "y"], f), (["x", "y"], []))
+        self.assertEqual(run_log.retry_plan("b", ["x"], f), (["x"], []))
+        self.assertEqual(run_log.retry_plan("a", ["x"], Path("/nonexistent/runs.jsonl")), (["x"], []))
+
+
 if __name__ == "__main__":
     unittest.main()

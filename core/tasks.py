@@ -1,3 +1,4 @@
+import os
 import traceback
 from datetime import datetime
 
@@ -7,7 +8,7 @@ from core.msg_builder import build_message
 from core.browser import get_browser
 from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, norm
 from core.session_store import SessionStore, capture_state
-from core.run_log import record_run
+from core.run_log import record_run, retry_plan
 from core import peer_ids
 
 
@@ -248,6 +249,14 @@ def runTasks():
         shown = [t for t in user["targets"] if norm(t)]  # 通知里显示配置里的原名，不显示归一化后的小写
         username = user.get("username", "未知用户")
         fingerprint = user.get("fingerprint", None)
+        prior = []  # 补发时：今天前面已经发到的好友，合并进这次的运行记录
+        if os.getenv("RETRY_MISSING") == "1":
+            todo, prior = retry_plan(username, shown)
+            if not todo:
+                logger.info(f"账号 {username} 没有需要补发的好友，跳过")
+                continue
+            targets = [t for t in map(norm, todo) if t]
+            logger.info(f"账号 {username} 补发：{'、'.join(todo)}")
         logger.info(f"开始处理账号 {username}")
         started = datetime.now().astimezone()
         canon = {norm(t): t for t in shown}  # 运行记录里好友名还原成配置里的原名
@@ -282,7 +291,14 @@ def runTasks():
                    for f in result.get("friends") or []]
         problems = result.get("problems") or []
         sent_ok = result["sent_ok"]
-        record_run(logger, username, shown, sent_ok, problems, started, friends, method_label())
+        # 补发的运行记录合并今天前面已经发到的好友，控制台看到的是这一天的完整情况；通知和退出码只看这一轮
+        logged = (problems, sent_ok, friends)
+        if prior:
+            unsure = [f["name"] for f in prior if f["status"] == "uncertain"]
+            logged = (problems + ([f"待确认（未自动重发）：{'、'.join(unsure)}"] if unsure else []),
+                      None if sent_ok is None else sent_ok + sum(f["status"] == "ok" for f in prior),
+                      prior + friends)
+        record_run(logger, username, shown, logged[1], logged[0], started, logged[2], method_label())
         # 一个账号出错不拖累后面的账号；整体失败 = 异常，或一条都没发出去（含门禁未通过）
         ok = sent_ok is not None and (sent_ok > 0 or not problems)
         if not ok:
@@ -295,6 +311,8 @@ def runTasks():
             "missing": [f["name"] for f in friends if f["status"] == "missing"],
         }))
 
+    if not results:  # 补发时所有账号都没有要补的人
+        return 0
     _notify_summary(results, failed)
 
     if failed:

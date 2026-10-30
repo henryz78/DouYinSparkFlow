@@ -34,6 +34,10 @@ Whenever the user says upstream has released a new version, Claude does the merg
 - **Random start window**: `CRON_RANDOM_WINDOW_SECONDS`, implemented in `docker/run-task.sh`.
 - **Run log**: one JSON line per account run in `logs/runs.jsonl` (`core/run_log.py`);
   scheduled runs skip when today's last run per account already succeeded.
+- **Retry of scheduled runs** (`docker/run-task.sh`, `retry_plan` in `core/run_log.py`): after a scheduled run, if today's last run
+  per account is not `ok`, the script waits `RETRY_INTERVAL_SECONDS` (default 3600) and reruns with `RETRY_MISSING=1`, at most `RETRY_MAX` (default 3)
+  times. A retry only sends to friends that were not `ok`/`uncertain` in today's last run, and its run record merges the earlier ones.
+  Manual runs never retry. The run lock is held only while a task runs, not while waiting.
 - **Personal web console**: `web/` (stdlib server, single password, self-signed HTTPS on
   port 8443, manual run, config editing, live logs). Started by `docker/entrypoint-cron.sh`
   only when `DASH_PASSWORD_HASH` is set. Config edits apply live via `docker/apply-config.sh`.

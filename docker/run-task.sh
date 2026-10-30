@@ -24,11 +24,31 @@ if [[ "${MANUAL_RUN:-}" != "1" ]]; then
     exit 0
   fi
 fi
-# 同一时刻只允许一个任务（定时和手动共用这把锁，控制台也靠它判断"是否正在运行"）
-exec 9>/tmp/douyin-run.lock
-if ! flock -n 9; then
-  echo "[docker] $(date '+%Y-%m-%d %H:%M:%S') another run in progress, skip"
-  exit 0
-fi
-python main.py task
+# 同一时刻只允许一个任务（定时和手动共用这把锁，控制台也靠它判断"是否正在运行"）。
+# 锁只在任务运行期间持有，补发前的等待不占锁。拿不到锁说明另一个任务在跑，直接跳过。
+run_once() {
+  (
+    if ! flock -n 9; then
+      echo "[docker] $(date '+%Y-%m-%d %H:%M:%S') another run in progress, skip"
+      exit 0
+    fi
+    "$@"
+  ) 9>/tmp/douyin-run.lock
+}
+
+rc=0
+run_once python main.py task || rc=$?
 echo "[docker] $(date '+%Y-%m-%d %H:%M:%S') scheduled task finished"
+
+# 定时运行后还有人没发到（会话列表偶尔加载不全，隔一阵再来多半就有了）：
+# 隔 RETRY_INTERVAL_SECONDS 秒只补发没成功的人，最多 RETRY_MAX 次；手动运行不补发。
+if [[ "${MANUAL_RUN:-}" != "1" ]]; then
+  for ((i = 1; i <= ${RETRY_MAX:-3}; i++)); do
+    python -m core.run_log && break
+    sleep "${RETRY_INTERVAL_SECONDS:-3600}"
+    python -m core.run_log && break  # 等待期间被手动补发成功了
+    echo "[docker] $(date '+%Y-%m-%d %H:%M:%S') retry ${i}/${RETRY_MAX:-3}: resend to those not done"
+    run_once env RETRY_MISSING=1 python main.py task || true
+  done
+fi
+exit "$rc"
