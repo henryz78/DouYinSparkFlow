@@ -89,6 +89,17 @@ class SessionStore:
         return True
 
 
+def without_cache(state):
+    """去掉页面缓存（IndexedDB），留下 cookie 和 localStorage。
+
+    带着旧缓存启动时，抖音聊天页直接渲染缓存里那一小段会话，不向服务器要完整列表。
+    """
+    if not state:
+        return state
+    return {**state, 'origins': [{k: v for k, v in o.items() if k != 'indexedDB'}
+                                 for o in state.get('origins') or []]}
+
+
 def capture_state(context):
     try:
         return context.storage_state(indexed_db=True)

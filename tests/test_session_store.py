@@ -4,7 +4,18 @@ import unittest
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
-from core.session_store import SessionStore, capture_state
+from core.session_store import SessionStore, capture_state, without_cache
+
+
+class WithoutCacheTests(unittest.TestCase):
+    def test_drops_indexeddb_keeps_login(self):
+        state = {'cookies': [{'name': 'sessionid'}], 'origins': [
+            {'origin': 'https://www.douyin.com', 'localStorage': [{'name': 'a', 'value': '1'}], 'indexedDB': [{'name': 'db'}]}]}
+        self.assertEqual(without_cache(state), {'cookies': [{'name': 'sessionid'}], 'origins': [
+            {'origin': 'https://www.douyin.com', 'localStorage': [{'name': 'a', 'value': '1'}]}]})
+        self.assertIn('indexedDB', state['origins'][0])
+        self.assertEqual(without_cache({'cookies': []}), {'cookies': [], 'origins': []})
+        self.assertIsNone(without_cache(None))
 
 
 class SessionStoreTests(unittest.TestCase):
