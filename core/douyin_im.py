@@ -476,6 +476,39 @@ JS_CHAT_MESSAGES = """(identity) => {
   return result.sort((a, b) => a.created_at - b.created_at);
 }"""
 
+# 只读「谁在什么时候发了消息」，不看内容，贴纸也能算上
+JS_MSG_TIMES = """(identity) => {
+  const selfUid = String(identity.self_uid || '');
+  const out = [];
+  for (const el of document.querySelectorAll('[data-e2e="msg-item-content"]')) {
+    const key = Object.keys(el).find(k => k.startsWith('__reactFiber'));
+    let fiber = key ? el[key] : null;
+    let msg = null;
+    for (let i = 0; fiber && i < 20; i++, fiber = fiber.return) {
+      const m = fiber.memoizedProps && fiber.memoizedProps.message;
+      if (m && m.serverId && m.createdAt) { msg = m; break; }
+    }
+    if (!msg || String(msg.conversationId) !== identity.conv_id) continue;
+    const t = new Date(msg.createdAt).getTime() / 1000;
+    if (!Number.isFinite(t) || t <= 0) continue;
+    const sender = msg.sender;
+    const fromMe = selfUid && typeof sender === 'string' && sender
+      ? sender === selfUid : !!el.closest('.MessageBoxContentisFromMe');
+    out.push({t, me: fromMe});
+  }
+  return out;
+}"""
+
+
+def sent_since_verdict(msgs, since):
+    """聊天记录里本人在 since（时间戳）之后发过消息吗？True / False / None（看不出来）。
+    连一条本人的消息都没读到，说明读取本身可能没成功（没加载、结构变了），不能当成「没发」。"""
+    mine = [m["t"] for m in msgs if m.get("me")]
+    if not mine:
+        return None
+    return max(mine) >= since
+
+
 SERVICE_NAMES = {
     100: "SEND_MESSAGE", 301: "GET_BY_CONVERSATION", 605: "PARTICIPANTS_LIST",
     610: "GET_CONVERSATION_INFO_LIST", 1001: "GET_STRANGER_LIST",
@@ -2174,6 +2207,24 @@ class DouyinIM:
         return self.page.evaluate(JS_CHAT_MESSAGES, {"conv_id": str(conv_id),
                                   "self_uid": str(self.self_uid or ""),
                                   "include_media": include_media}) or []
+
+    def sent_since(self, conv_id, since, wait=8.0):
+        """当前已选中的会话里，本人 since 之后发过消息吗？True / False / None（读不到，不下结论）。"""
+        args = {"conv_id": str(conv_id), "self_uid": str(self.self_uid or "")}
+
+        def read():
+            try:
+                return self.page.evaluate(JS_MSG_TIMES, args) or []
+            except Exception:
+                return []
+
+        deadline = time.monotonic() + wait
+        msgs = read()
+        while not any(m.get("me") for m in msgs) and time.monotonic() < deadline:
+            self.page.wait_for_timeout(500)
+            msgs = read()
+        self.page.wait_for_timeout(1000)  # 历史消息一次到齐，再等一下防止只渲染了一半
+        return sent_since_verdict(read() or msgs, since)
 
     def _editor(self):
         for sel in ('[data-e2e="msg-input"] .public-DraftEditor-content',

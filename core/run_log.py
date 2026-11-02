@@ -70,5 +70,36 @@ def retry_plan(account, names, path=None, now=None):
     return [n for n in names if n not in skip], done
 
 
+def verify_names(account, names, path=None, now=None):
+    """核对：今天最后一次运行里记为已发到（含待确认）的好友，需要去聊天记录里再看一眼。"""
+    friends = (_last_today(path, now).get(account) or {}).get("friends") or []
+    return [f["name"] for f in friends if f.get("status") in ("ok", "uncertain") and f.get("name") in names]
+
+
+def apply_verdicts(friends, verdicts):
+    """按核对结果改逐人状态：聊天记录里没有 → failed（下次补发）；待确认的看到了 → ok。
+    verdicts={名字: True/False/None}，None（看不出来）保持原状。"""
+    out = []
+    for f in friends:
+        v = verdicts.get(f["name"])
+        if v is False and f["status"] in ("ok", "uncertain"):
+            f = {**f, "status": "failed"}
+        elif v is True and f["status"] == "uncertain":
+            f = {**f, "status": "ok"}
+        out.append(f)
+    return out
+
+
+def problems_of(friends):
+    """逐人状态 → 运行记录里的问题列表（空才算完全成功）。"""
+    label = {"failed": "发送失败", "uncertain": "待确认（未自动重发）", "missing": "未找到", "select_failed": "选中失败"}
+    out = []
+    for status, text in label.items():
+        names = [f["name"] for f in friends if f["status"] == status]
+        if names:
+            out.append(f"{text}：{'、'.join(names)}")
+    return out
+
+
 if __name__ == "__main__":  # run-task.sh 用：退出码 0 = 今天已完成
     raise SystemExit(0 if today_done() else 1)

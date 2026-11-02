@@ -36,6 +36,16 @@ class FindAndSelectTests(unittest.TestCase):
         self.assertEqual(im.last_scan["missing"], ["x"])
 
 
+class SentSinceTests(unittest.TestCase):
+    def test_verdicts(self):
+        from core.douyin_im import sent_since_verdict as v
+        today = 1000
+        self.assertTrue(v([{"t": 500, "me": True}, {"t": 1500, "me": True}], today))
+        self.assertFalse(v([{"t": 500, "me": True}, {"t": 1500, "me": False}], today))  # 只有对方今天发了
+        self.assertIsNone(v([{"t": 1500, "me": False}], today))  # 一条自己的都没读到：读取可能没成功，不下结论
+        self.assertIsNone(v([], today))
+
+
 class WaitReceiptTests(unittest.TestCase):
     def test_late_server_receipt_is_not_left_for_the_next_friend(self):
         im = object.__new__(DouyinIM)

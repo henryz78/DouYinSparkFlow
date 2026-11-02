@@ -90,5 +90,28 @@ class RetryPlanTests(TodayDoneTests):
         self.assertEqual(run_log.retry_plan("a", ["x"], Path("/nonexistent/runs.jsonl")), (["x"], []))
 
 
+class VerifyTests(TodayDoneTests):
+    FRIENDS = [{"name": "a", "status": "ok"}, {"name": "b", "status": "ok"},
+               {"name": "c", "status": "uncertain"}, {"name": "d", "status": "missing"}]
+
+    def test_only_friends_counted_as_sent_get_checked(self):
+        f = self._rows({**self._row("x", "partial"), "friends": self.FRIENDS})
+        self.assertEqual(run_log.verify_names("x", ["a", "b", "c", "d"], f), ["a", "b", "c"])
+
+    def test_missing_message_becomes_failed_so_it_is_resent(self):
+        out = run_log.apply_verdicts(self.FRIENDS, {"a": True, "b": False, "c": True, "d": False})
+        self.assertEqual([x["status"] for x in out], ["ok", "failed", "ok", "missing"])
+        todo, _ = run_log.retry_plan("x", ["a", "b", "c", "d"], self._rows({**self._row("x", "partial"), "friends": out}))
+        self.assertEqual(todo, ["b", "d"])
+
+    def test_unreadable_chat_changes_nothing(self):
+        self.assertEqual(run_log.apply_verdicts(self.FRIENDS, {"a": None, "b": None}), self.FRIENDS)
+
+    def test_problems_follow_the_friend_statuses(self):
+        self.assertEqual(run_log.problems_of([{"name": "a", "status": "ok"}]), [])
+        out = run_log.apply_verdicts(self.FRIENDS, {"b": False})
+        self.assertEqual(run_log.problems_of(out), ["发送失败：b", "待确认（未自动重发）：c", "未找到：d"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -38,6 +38,12 @@ Whenever the user says upstream has released a new version, Claude does the merg
   per account is not `ok`, the script waits `RETRY_INTERVAL_SECONDS` (default 3600) and reruns with `RETRY_MISSING=1`, at most `RETRY_MAX` (default 3)
   times. A retry only sends to friends that were not `ok`/`uncertain` in today's last run, and its run record merges the earlier ones.
   Manual runs never retry. The run lock is held only while a task runs, not while waiting.
+  Before each retry round the script also **verifies** (`VERIFY_SENT=1`, `verifyTasks` in `core/tasks.py`,
+  `VERIFY_DELAY_SECONDS` default 600 after the run): it reopens the chats of friends recorded as `ok`/`uncertain`
+  and checks (`DouyinIM.sent_since`) that a message from us exists today. A friend whose chat shows none is rewritten
+  to `failed` in a new run row, so the retry resends to them. A chat where no message of ours can be read at all is
+  "unknown" and left unchanged, so a broken reader never causes resends. The send receipt alone is not trusted:
+  the page echoes a message locally and receipts from the VPS can arrive 5-9 s late.
 - **Personal web console**: `web/` (stdlib server, single password, self-signed HTTPS on
   port 8443, manual run, config editing, live logs). Started by `docker/entrypoint-cron.sh`
   only when `DASH_PASSWORD_HASH` is set. Config edits apply live via `docker/apply-config.sh`.

@@ -8,7 +8,7 @@ from core.msg_builder import build_message
 from core.browser import get_browser
 from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, norm
 from core.session_store import SessionStore, capture_state
-from core.run_log import record_run, retry_plan
+from core.run_log import record_run, retry_plan, verify_names, apply_verdicts, problems_of, _last_today
 from core import peer_ids
 
 
@@ -219,6 +219,89 @@ def do_user_task(browser, username, cookies, targets, unique_id='', fingerprint=
         context.close()
 
 
+def verify_user(browser, username, cookies, names, unique_id='', fingerprint=''):
+    """打开聊天，逐个看今天的消息是否真的在。返回 {好友名: True/False/None}。
+    只读：不发送，也不保存登录状态。"""
+    sessions = SessionStore(unique_id, cookies, fingerprint)
+    state = sessions.load()
+    context = browser.new_context(**({'storage_state': state} if state else {}))
+    context.set_default_navigation_timeout(config["browserActionTimeout"])
+    context.set_default_timeout(config["browserActionTimeout"])
+    page = context.new_page()
+    if state is None:
+        context.add_cookies(cookies)
+    since = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    verdicts = {}
+    canon = {norm(n): n for n in names}
+    words = {True: "今天的消息在", False: "今天的消息不在", None: "读不到聊天记录，不下结论"}
+    im = None
+    try:
+        im = DouyinIM(page, timeout=config["imScanTimeout"], ready_timeout=config["imReadyTimeout"],
+                      settle_ms=config["friendListSettleMs"], max_steps=config["imMaxSteps"],
+                      peer_ids=peer_ids.load(unique_id))
+        if im.wait_ready().get("status") != STATUS_READY:
+            logger.warning(f"账号 {username} 核对：操作前检查未通过，跳过")
+            return verdicts
+        for friend in find_and_select(im, page, [t for t in map(norm, names) if t]):
+            name = canon.get(norm(friend["display"]), friend["display"])
+            verdicts[name] = im.sent_since(friend.get("conv_id"), since)
+            logger.info(f"账号 {username} 核对 {name}：{words[verdicts[name]]}")
+        return verdicts
+    finally:
+        if im is not None:
+            try:
+                im.detach()
+            except Exception:
+                pass
+        context.close()
+
+
+def verifyTasks():
+    """定时运行之后过一会儿再来看一眼：回执说发成功了，聊天记录里真的有吗？
+    没有的改记为失败，写一条新的运行记录，随后的补发只发给这些人。"""
+    logger.info("开始核对今天的发送")
+    for user in userData:
+        username = user.get("username", "未知用户")
+        shown = [t for t in user["targets"] if norm(t)]
+        names = verify_names(username, shown)
+        if not names:
+            continue
+        browser = None
+        try:
+            browser = get_browser(user.get("fingerprint", None))
+            verdicts = verify_user(browser, username, user["cookies"], names,
+                                   user.get('unique_id', ''), user.get("fingerprint", None) or '')
+        except Exception:
+            logger.error(f"账号 {username} 核对异常：\n{traceback.format_exc()}")
+            continue
+        finally:
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception:
+                    logger.warning(traceback.format_exc())
+        before = (_last_today().get(username) or {}).get("friends") or []
+        friends = apply_verdicts(before, verdicts)
+        if friends == before:
+            logger.info(f"账号 {username} 核对完成，没有变化")
+            continue
+        sent_ok = sum(f["status"] == "ok" for f in friends)
+        record_run(logger, username, shown, sent_ok, problems_of(friends),
+                   datetime.now().astimezone(), friends, method_label())
+        gone = [f["name"] for f, b in zip(friends, before) if f["status"] == "failed" and b["status"] != "failed"]
+        if gone:
+            logger.warning(f"账号 {username} 核对发现这些人今天的消息不在聊天记录里，稍后补发：{'、'.join(gone)}")
+        try:
+            from core import notify
+            text = (f"抖音火花续期 · 核对\n账号 {username}："
+                    + (f"发现 {'、'.join(gone)} 的消息不在聊天记录里，稍后补发" if gone else "待确认的好友已核实发到"))
+            for label, ok, message in notify.send_all(config.get("notifications") or [], text):
+                logger.info(f"通知已发送：{label}" if ok else f"通知发送失败：{label} - {message}")
+        except Exception:
+            logger.warning(f"通知发送异常：\n{traceback.format_exc()}")
+    return 0
+
+
 def runTasks():
     """跑一轮所有账号的任务。
 
@@ -226,6 +309,8 @@ def runTasks():
     「部分好友没找到 / 发送失败」不计入整体失败（可能只是改名），只记日志。
     调度器靠这个退出码判断「今天是否算成功执行」。
     """
+    if os.getenv("VERIFY_SENT") == "1":
+        return verifyTasks()
     logger.info("开始执行任务")
     if not userData:
         logger.error("没有可执行的账号任务，请检查 TASKS 和 COOKIES_* 配置")
