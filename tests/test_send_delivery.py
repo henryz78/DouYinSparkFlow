@@ -36,6 +36,22 @@ class FindAndSelectTests(unittest.TestCase):
         self.assertEqual(im.last_scan["missing"], ["x"])
 
 
+class WaitReceiptTests(unittest.TestCase):
+    def test_late_server_receipt_is_not_left_for_the_next_friend(self):
+        im = object.__new__(DouyinIM)
+        im.mon = SimpleNamespace(sends=[])
+        im._msg_state = Mock(return_value={"count": 1, "lastFromMe": True})  # 本地回显立刻出现
+        clock = {"t": 0.0}
+        def tick(ms):
+            clock["t"] += ms / 1000
+            if clock["t"] >= 8:  # 服务器回执晚到
+                im.mon.sends.append({"ok": True, "message_id": "late"})
+        im.page = SimpleNamespace(wait_for_timeout=tick)
+        with patch("core.douyin_im.time.time", side_effect=lambda: clock["t"]):
+            rc = im._wait_receipt(0, {"count": 0}, "", 20)
+        self.assertEqual(rc["http"]["message_id"], "late")
+
+
 class DeliveryTests(unittest.TestCase):
     def setUp(self):
         self.im = object.__new__(DouyinIM)

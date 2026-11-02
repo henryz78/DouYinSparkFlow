@@ -2229,7 +2229,9 @@ class DouyinIM:
                 break
             if http and time.time() - t0 > 1.0:
                 break
-            if dom and time.time() - t0 > 2.0:
+            # 页面一点发送就先本地回显，DOM 很快就变；服务器回执在境外网络下可能晚 5~9 秒。
+            # 不等到回执就往下走，晚到的回执会被记到下一个好友头上（该好友实际没发出去）。
+            if dom and time.time() - t0 > 15.0:
                 break
             self.page.wait_for_timeout(150)
         return {"ok": bool(http or dom), "http": http, "dom": dom}
